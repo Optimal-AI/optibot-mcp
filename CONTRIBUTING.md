@@ -51,6 +51,10 @@ optibot-mcp/
 - No secrets in code or tests
 - Update CHANGELOG.md for user-facing changes
 
+## Code of Conduct
+
+Be respectful and constructive. We follow the [Contributor Covenant v2.1](https://www.contributor-covenant.org/version/2/1/code_of_conduct/).
+
 ## Questions?
 
-Reach out at [support@getoptimal.ai](mailto:support@getoptimal.ai).
+Open a discussion or email [support@getoptimal.ai](mailto:support@getoptimal.ai).

@@ -1,7 +1,29 @@
+# Dependencies
 node_modules/
+
+# Build output
 dist/
+
+# Test coverage
 coverage/
+
+# Logs
 *.log
+
+# OS files
 .DS_Store
+Thumbs.db
+
+# Environment & secrets
 .env
-.env.local
+.env.*
+*.secret
+*.credentials
+*.pem
+*.key
+*.p12
+.npmrc
+
+# Editor configs
+.vscode/
+.idea/

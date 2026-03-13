@@ -1,6 +1,26 @@
-# Optibot MCP Server
+# Optibot MCP Server — AI Code Reviews for Any Editor
 
-MCP (Model Context Protocol) server for AI-powered code reviews by [Optibot](https://getoptimal.ai/?utm_source=npm&utm_medium=readme&utm_campaign=optibot-mcp). Works with Claude Desktop, Cursor, Windsurf, Claude Code, and any MCP-compatible client.
+[![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![npm](https://img.shields.io/npm/v/@optimalai/optibot-mcp)](https://www.npmjs.com/package/@optimalai/optibot-mcp)
+[![CI](https://github.com/Optimal-AI/optibot-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/Optimal-AI/optibot-mcp/actions/workflows/ci.yml)
+
+An [MCP](https://modelcontextprotocol.io/) server that brings [Optibot](https://getoptimal.ai/?utm_source=npm&utm_medium=readme&utm_campaign=optibot-mcp) AI-powered code reviews to Claude Desktop, Cursor, Windsurf, Claude Code, and any MCP-compatible client.
+
+Review local changes, compare branches, and get actionable feedback — all from your AI assistant.
+
+> **What is MCP?**
+> The [Model Context Protocol](https://modelcontextprotocol.io/) is an open standard that lets AI assistants use external tools and data sources. Once you add this server, your assistant can run Optibot reviews on your behalf — just ask in natural language.
+
+<!-- ## Demo -->
+<!-- ![Optibot reviewing code in an editor](assets/demo.gif) -->
+
+## What It Does
+
+- **Review your code** — say "review my changes" and get an AI code review instantly
+- **Compare branches** — "review my branch against main" triggers a full branch diff review
+- **Review patch files** — point it at any `.patch` or `.diff` file
+- **Manage API keys** — create, list, and delete keys for CI/CD automation
+- **Detect merge conflicts** — warns you about conflicts before you review
 
 ## Install
 
@@ -46,6 +66,24 @@ Add to your Cursor MCP configuration (`.cursor/mcp.json`):
 }
 ```
 
+### Windsurf
+
+Add to your Windsurf MCP configuration (`~/.codeium/windsurf/mcp_config.json`):
+
+```json
+{
+  "mcpServers": {
+    "optibot": {
+      "command": "npx",
+      "args": ["-y", "@optimalai/optibot-mcp"],
+      "env": {
+        "OPTIBOT_API_KEY": "optk_your_key_here"
+      }
+    }
+  }
+}
+```
+
 ### Claude Code
 
 ```bash
@@ -70,7 +108,20 @@ npx @optimalai/optibot apikey create my-mcp-key
 
 ### Option 2: Browser Login
 
-Use the `login` tool to authenticate via browser. This saves credentials to `~/.optibot/config.json`.
+Use the `login` tool to authenticate via browser. This saves credentials to `~/.optibot/config.json` (90-day token).
+
+## Usage
+
+Once configured, just ask your AI assistant naturally:
+
+| What you say | What happens |
+|---|---|
+| "review my changes" | Reviews uncommitted local changes |
+| "review my branch against main" | Compares current branch against main |
+| "review this diff file" | Reviews an arbitrary patch file |
+| "check if I'm authenticated" | Shows current auth status |
+| "create an API key for CI" | Creates and displays a new API key |
+| "list my API keys" | Lists all API keys with metadata |
 
 ## Available Tools
 
@@ -86,15 +137,15 @@ Use the `login` tool to authenticate via browser. This saves credentials to `~/.
 | `list_api_keys` | List all API keys |
 | `delete_api_key` | Delete an API key by ID |
 
-## Usage Examples
+## CI/CD Integration
 
-Once configured, ask your AI assistant:
-
-- "Review my local changes"
-- "Review this branch against main"
-- "Check if I'm authenticated with Optibot"
-- "Create an API key called ci-deploy"
-- "List my API keys"
+```yaml
+# GitHub Actions
+- name: Optibot Review
+  env:
+    OPTIBOT_API_KEY: ${{ secrets.OPTIBOT_API_KEY }}
+  run: npx @optimalai/optibot-mcp
+```
 
 ## Environment Variables
 
@@ -108,16 +159,17 @@ Once configured, ask your AI assistant:
 - Node.js >= 18
 - Git (for review tools)
 
-## Related
+## Contributing
 
-- [@optimalai/optibot](https://www.npmjs.com/package/@optimalai/optibot) — CLI tool for direct terminal use
-- [optibot-skill](https://github.com/Optimal-AI/optibot-skill) — Claude Code plugin
-- [Optibot Website](https://getoptimal.ai/?utm_source=npm&utm_medium=readme&utm_campaign=optibot-mcp)
+Contributions are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
 ## Links
 
-- [Website](https://getoptimal.ai/?utm_source=npm&utm_medium=readme&utm_campaign=optibot-mcp)
-- [Sign Up](https://agents.getoptimal.ai/signup?utm_source=npm&utm_medium=readme&utm_campaign=optibot-mcp)
+- [Optibot Website](https://getoptimal.ai/?utm_source=npm&utm_medium=readme&utm_campaign=optibot-mcp)
+- [Sign Up (Free)](https://agents.getoptimal.ai/signup?utm_source=npm&utm_medium=readme&utm_campaign=optibot-mcp)
+- [Report an Issue](https://github.com/Optimal-AI/optibot-mcp/issues)
+- [Optibot CLI on npm](https://www.npmjs.com/package/optibot)
+- [Optibot Claude Code Plugin](https://github.com/Optimal-AI/optibot-skill)
 - [Twitter / X](https://x.com/optimaldotai)
 - [LinkedIn](https://www.linkedin.com/company/optimaldotai/)
 - [YouTube](https://www.youtube.com/@Optimaldotai)
@@ -125,4 +177,5 @@ Once configured, ask your AI assistant:
 
 ## License
 
-MIT
+MIT — see [LICENSE](LICENSE) for details.
+Copyright (c) 2026 Optimal AI, Inc.
