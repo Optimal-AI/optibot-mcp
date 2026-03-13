@@ -1,0 +1,53 @@
+{
+  "name": "@optimalai/optibot-mcp",
+  "version": "1.0.0",
+  "description": "MCP server for AI code reviews powered by Optibot",
+  "type": "module",
+  "main": "./dist/index.js",
+  "bin": {
+    "optibot-mcp": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "start": "node dist/index.js",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "prepublishOnly": "rm -rf dist && npm run build && npm test"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.7.0",
+    "open": "^9.1.0",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "@vitest/coverage-v8": "^4.0.18",
+    "typescript": "^5.5.0",
+    "vitest": "^4.0.18"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "files": [
+    "dist"
+  ],
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "ai",
+    "code-review",
+    "optibot",
+    "pull-request",
+    "pr-review",
+    "automated-review",
+    "code-quality",
+    "claude",
+    "cursor",
+    "developer-tools",
+    "javascript",
+    "typescript"
+  ],
+  "license": "MIT"
+}
