@@ -1,4 +1,4 @@
-import { ReviewResponse, ApiKeyCreateResponse, ApiKeyListItem, ApiKeyListResponse } from '../types.js';
+import { ReviewResponse, ApiKeyCreateResponse, ApiKeyListItem, ApiKeyListResponse, UserProfile, ReviewStatus } from '../types.js';
 import { getApiBaseUrl } from './apiConfig.js';
 
 const API_BASE_URL = getApiBaseUrl();
@@ -127,5 +127,35 @@ export class ApiClient {
         if (!response.ok) {
             await this.throwApiError(response);
         }
+    }
+
+    async getUserProfile(): Promise<UserProfile> {
+        const response = await fetch(`${API_BASE_URL}/api/user/profile`, {
+            method: 'GET',
+            headers: {
+                'Authorization': `Bearer ${this.apiKey}`,
+            },
+        });
+
+        if (!response.ok) {
+            await this.throwApiError(response);
+        }
+
+        return await response.json() as UserProfile;
+    }
+
+    async getReviewStatus(): Promise<ReviewStatus> {
+        const response = await fetch(`${API_BASE_URL}/api/user/review-status`, {
+            method: 'GET',
+            headers: {
+                'Authorization': `Bearer ${this.apiKey}`,
+            },
+        });
+
+        if (!response.ok) {
+            await this.throwApiError(response);
+        }
+
+        return await response.json() as ReviewStatus;
     }
 }

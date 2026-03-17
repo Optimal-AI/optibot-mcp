@@ -136,16 +136,40 @@ Once configured, just ask your AI assistant naturally:
 | `create_api_key` | Create a new API key for CI/CD |
 | `list_api_keys` | List all API keys |
 | `delete_api_key` | Delete an API key by ID |
+| `get_profile` | Get your user profile and review quota status |
+
+## Real-Time Progress
+
+During reviews, the MCP server connects to the Optibot backend via WebSocket and emits real-time progress notifications using MCP logging messages. Your MCP client will receive updates as the review progresses through these steps:
+
+1. **started** — Review request accepted
+2. **analyzing_patch** — Parsing and analyzing the diff
+3. **tool_call** — Running analysis tools (with tool name and query details)
+4. **generating_review** — Generating the final review
+5. **completed** — Review finished
 
 ## CI/CD Integration
 
+The Optibot MCP server can be used in CI/CD pipelines for automated code reviews. Use the `OPTIBOT_API_KEY` environment variable for headless (non-interactive) authentication — no browser login is needed.
+
+### Setting Up
+
+1. Generate an API key from the [Optibot dashboard](https://agents.getoptimal.ai) or using the `create_api_key` tool.
+2. Store it as a secret in your CI provider (e.g., GitHub Actions secret, GitLab CI variable).
+3. Pass it as `OPTIBOT_API_KEY` in your pipeline environment.
+
+### GitHub Actions Example
+
 ```yaml
-# GitHub Actions
 - name: Optibot Review
   env:
     OPTIBOT_API_KEY: ${{ secrets.OPTIBOT_API_KEY }}
   run: npx @optimalai/optibot-mcp
 ```
+
+### Other CI Providers
+
+Set the `OPTIBOT_API_KEY` environment variable in your pipeline configuration. The MCP server will automatically use it for authentication without requiring interactive login.
 
 ## Environment Variables
 
