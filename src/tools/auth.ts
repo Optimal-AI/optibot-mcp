@@ -3,6 +3,9 @@ import * as crypto from 'crypto';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { readConfig, writeConfig, deleteConfig } from '../lib/config.js';
 import { getApiBaseUrl } from '../lib/apiConfig.js';
+import { ApiClient } from '../lib/api.js';
+import { formatError } from '../lib/output.js';
+import { formatResetTime } from '../lib/output.js';
 
 const PORT = 8080;
 
@@ -204,6 +207,45 @@ export function registerAuthTools(server: McpServer): void {
                         text: 'Not authenticated.\n\nTo authenticate:\n1. Use the "login" tool to authenticate via browser\n2. Or set the OPTIBOT_API_KEY environment variable\n\nSign up at: https://agents.getoptimal.ai/signup'
                     }]
                 };
+            }
+        }
+    );
+
+    // Tool: get_profile
+    server.tool(
+        'get_profile',
+        'Get your Optibot user profile and review quota status. Shows email, profile info, and how many reviews you have remaining today.',
+        async () => {
+            try {
+                const config = await readConfig();
+                const client = new ApiClient(config.apiKey);
+
+                const [profile, reviewStatus] = await Promise.all([
+                    client.getUserProfile(),
+                    client.getReviewStatus(),
+                ]);
+
+                const lines: string[] = [
+                    '## User Profile',
+                    '',
+                    `Email: ${profile.email}`,
+                ];
+
+                if (profile.name) {
+                    lines.push(`Name: ${profile.name}`);
+                }
+
+                lines.push('', '## Review Quota', '');
+                lines.push(`Used: ${reviewStatus.current} / ${reviewStatus.limit}`);
+                lines.push(`Remaining: ${reviewStatus.remaining}`);
+
+                if (reviewStatus.resetAt) {
+                    lines.push(`Resets: ${formatResetTime(reviewStatus.resetAt)}`);
+                }
+
+                return { content: [{ type: 'text' as const, text: lines.join('\n') }] };
+            } catch (err) {
+                return { content: [{ type: 'text' as const, text: formatError(err) }], isError: true };
             }
         }
     );

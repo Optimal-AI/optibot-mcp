@@ -51,3 +51,17 @@ export interface ApiKeyListItem {
 export interface ApiKeyListResponse {
     keys: ApiKeyListItem[];
 }
+
+export interface UserProfile {
+    firebaseUserId: string;
+    email: string;
+    name?: string;
+    avatarUrl?: string;
+}
+
+export interface ReviewStatus {
+    current: number;
+    limit: number;
+    remaining: number;
+    resetAt?: string;
+}
