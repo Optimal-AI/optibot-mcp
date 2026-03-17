@@ -268,4 +268,76 @@ describe('ApiClient', () => {
             }
         });
     });
+
+    describe('getUserProfile', () => {
+        it('sends GET to /api/user/profile with Authorization header', async () => {
+            mockOkResponse({ firebaseUserId: 'u1', email: 'a@b.com' });
+            await client.getUserProfile();
+
+            expect(fetchMock).toHaveBeenCalledWith(
+                'http://test-api.local/api/user/profile',
+                expect.objectContaining({
+                    method: 'GET',
+                    headers: { 'Authorization': 'Bearer test-api-key' },
+                })
+            );
+        });
+
+        it('returns parsed profile on success', async () => {
+            const profile = { firebaseUserId: 'u1', email: 'a@b.com', name: 'Alice' };
+            mockOkResponse(profile);
+            const result = await client.getUserProfile();
+            expect(result).toEqual(profile);
+        });
+
+        it('throws error on failure', async () => {
+            mockErrorResponse(401, { message: 'Unauthorized' });
+            await expect(client.getUserProfile()).rejects.toThrow('Unauthorized');
+        });
+    });
+
+    describe('getReviewStatus', () => {
+        it('sends GET to /api/user/review-status with Authorization header', async () => {
+            mockOkResponse({ current: 5, limit: 100, remaining: 95 });
+            await client.getReviewStatus();
+
+            expect(fetchMock).toHaveBeenCalledWith(
+                'http://test-api.local/api/user/review-status',
+                expect.objectContaining({
+                    method: 'GET',
+                    headers: { 'Authorization': 'Bearer test-api-key' },
+                })
+            );
+        });
+
+        it('returns parsed review status on success', async () => {
+            const status = { current: 5, limit: 100, remaining: 95, resetAt: '2026-03-18T00:00:00Z' };
+            mockOkResponse(status);
+            const result = await client.getReviewStatus();
+            expect(result).toEqual(status);
+        });
+
+        it('throws error on failure', async () => {
+            mockErrorResponse(500);
+            await expect(client.getReviewStatus()).rejects.toThrow('API request failed');
+        });
+    });
+
+    describe('review with reviewSessionId', () => {
+        it('includes reviewSessionId in body when provided', async () => {
+            mockOkResponse({});
+            await client.review({ patch: 'x', reviewSessionId: 'sess-123' });
+
+            const callBody = JSON.parse(fetchMock.mock.calls[0][1].body);
+            expect(callBody.reviewSessionId).toBe('sess-123');
+        });
+
+        it('omits reviewSessionId when not provided', async () => {
+            mockOkResponse({});
+            await client.review({ patch: 'x' });
+
+            const callBody = JSON.parse(fetchMock.mock.calls[0][1].body);
+            expect(callBody.reviewSessionId).toBeUndefined();
+        });
+    });
 });

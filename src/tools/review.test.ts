@@ -15,6 +15,8 @@ const mockCheckMergeConflicts = vi.fn();
 const mockFormatReview = vi.fn();
 const mockFormatError = vi.fn();
 const mockApiReview = vi.fn();
+const mockStartSession = vi.fn();
+const mockEndSession = vi.fn();
 
 vi.mock('../lib/config.js', () => ({
     readConfig: (...args: any[]) => mockReadConfig(...args),
@@ -43,7 +45,15 @@ vi.mock('../lib/output.js', () => ({
     formatError: (...args: any[]) => mockFormatError(...args),
 }));
 
-import { registerReviewTools } from './review.js';
+vi.mock('../lib/reviewProgress.js', () => ({
+    ReviewProgressService: class {
+        startSession(...args: any[]) { return mockStartSession(...args); }
+        endSession(...args: any[]) { return mockEndSession(...args); }
+    },
+    // Export the type as a no-op for imports
+}));
+
+import { registerReviewTools, formatProgressStep } from './review.js';
 
 describe('review tools', () => {
     let registeredTools: Map<string, Function>;
@@ -68,6 +78,12 @@ describe('review tools', () => {
         expect(registeredTools.has('review_diff_file')).toBe(true);
     });
 
+    const mockExtra = { sendNotification: vi.fn() };
+
+    beforeEach(() => {
+        mockStartSession.mockResolvedValue('session-id-123');
+    });
+
     describe('review_local_changes', () => {
         it('returns formatted review on success', async () => {
             mockReadConfig.mockResolvedValue({ apiKey: 'key' });
@@ -80,10 +96,12 @@ describe('review tools', () => {
             mockFormatReview.mockReturnValue('Review output');
 
             const handler = registeredTools.get('review_local_changes')!;
-            const result = await handler({});
+            const result = await handler(mockExtra);
 
             expect(result.content[0].text).toBe('Review output');
             expect(result.isError).toBeUndefined();
+            expect(mockStartSession).toHaveBeenCalled();
+            expect(mockEndSession).toHaveBeenCalled();
         });
 
         it('returns "No changes" when diff is empty', async () => {
@@ -93,7 +111,7 @@ describe('review tools', () => {
             mockGetDiffHead.mockResolvedValue('');
 
             const handler = registeredTools.get('review_local_changes')!;
-            const result = await handler({});
+            const result = await handler(mockExtra);
 
             expect(result.content[0].text).toBe('No changes to review.');
         });
@@ -103,10 +121,45 @@ describe('review tools', () => {
             mockFormatError.mockReturnValue('Auth error');
 
             const handler = registeredTools.get('review_local_changes')!;
-            const result = await handler({});
+            const result = await handler(mockExtra);
 
             expect(result.isError).toBe(true);
             expect(result.content[0].text).toBe('Auth error');
+        });
+
+        it('ends progress session even when review fails', async () => {
+            mockReadConfig.mockResolvedValue({ apiKey: 'key' });
+            mockGetRepoRoot.mockResolvedValue('/repo');
+            mockGetRepoName.mockResolvedValue('my-repo');
+            mockGetDiffHead.mockResolvedValue('diff');
+            mockGetChangedFiles.mockResolvedValue([]);
+            mockGetFileContents.mockResolvedValue({});
+            mockApiReview.mockRejectedValue(new Error('API down'));
+            mockFormatError.mockReturnValue('API error');
+
+            const handler = registeredTools.get('review_local_changes')!;
+            const result = await handler(mockExtra);
+
+            expect(result.isError).toBe(true);
+            expect(mockEndSession).toHaveBeenCalled();
+        });
+
+        it('passes reviewSessionId to API client', async () => {
+            mockReadConfig.mockResolvedValue({ apiKey: 'key' });
+            mockGetRepoRoot.mockResolvedValue('/repo');
+            mockGetRepoName.mockResolvedValue('my-repo');
+            mockGetDiffHead.mockResolvedValue('diff');
+            mockGetChangedFiles.mockResolvedValue([]);
+            mockGetFileContents.mockResolvedValue({});
+            mockApiReview.mockResolvedValue({});
+            mockFormatReview.mockReturnValue('Review');
+
+            const handler = registeredTools.get('review_local_changes')!;
+            await handler(mockExtra);
+
+            expect(mockApiReview).toHaveBeenCalledWith(
+                expect.objectContaining({ reviewSessionId: 'session-id-123' })
+            );
         });
     });
 
@@ -124,10 +177,11 @@ describe('review tools', () => {
             mockFormatReview.mockReturnValue('Review');
 
             const handler = registeredTools.get('review_branch')!;
-            const result = await handler({});
+            const result = await handler({}, mockExtra);
 
             expect(mockDetectBaseBranch).toHaveBeenCalled();
             expect(result.content[0].text).toContain('origin/main');
+            expect(mockEndSession).toHaveBeenCalled();
         });
 
         it('uses provided branch name', async () => {
@@ -142,7 +196,7 @@ describe('review tools', () => {
             mockFormatReview.mockReturnValue('Review');
 
             const handler = registeredTools.get('review_branch')!;
-            const result = await handler({ branch: 'develop' });
+            const result = await handler({ branch: 'develop' }, mockExtra);
 
             expect(mockDetectBaseBranch).not.toHaveBeenCalled();
             expect(result.content[0].text).toContain('develop');
@@ -161,7 +215,7 @@ describe('review tools', () => {
             mockFormatReview.mockReturnValue('Review');
 
             const handler = registeredTools.get('review_branch')!;
-            const result = await handler({});
+            const result = await handler({}, mockExtra);
 
             expect(result.content[0].text).toContain('Merge conflicts detected');
         });
@@ -175,9 +229,20 @@ describe('review tools', () => {
             mockGetDiffBranch.mockResolvedValue('');
 
             const handler = registeredTools.get('review_branch')!;
-            const result = await handler({});
+            const result = await handler({}, mockExtra);
 
             expect(result.content[0].text).toContain('No changes found');
+        });
+
+        it('returns error on failure', async () => {
+            mockReadConfig.mockRejectedValue(new Error('Fail'));
+            mockFormatError.mockReturnValue('Branch error');
+
+            const handler = registeredTools.get('review_branch')!;
+            const result = await handler({}, mockExtra);
+
+            expect(result.isError).toBe(true);
+            expect(result.content[0].text).toBe('Branch error');
         });
     });
 
@@ -189,9 +254,10 @@ describe('review tools', () => {
             mockFormatReview.mockReturnValue('Review output');
 
             const handler = registeredTools.get('review_diff_file')!;
-            const result = await handler({ file_path: 'changes.patch' });
+            const result = await handler({ file_path: 'changes.patch' }, mockExtra);
 
             expect(result.content[0].text).toBe('Review output');
+            expect(mockEndSession).toHaveBeenCalled();
         });
 
         it('returns empty diff message for empty file', async () => {
@@ -199,7 +265,7 @@ describe('review tools', () => {
             mockReadDiffFile.mockResolvedValue('   ');
 
             const handler = registeredTools.get('review_diff_file')!;
-            const result = await handler({ file_path: 'empty.patch' });
+            const result = await handler({ file_path: 'empty.patch' }, mockExtra);
 
             expect(result.content[0].text).toContain('empty');
         });
@@ -210,9 +276,51 @@ describe('review tools', () => {
             mockFormatError.mockReturnValue('Traversal error');
 
             const handler = registeredTools.get('review_diff_file')!;
-            const result = await handler({ file_path: '../../etc/passwd' });
+            const result = await handler({ file_path: '../../etc/passwd' }, mockExtra);
 
             expect(result.isError).toBe(true);
+        });
+    });
+
+    describe('formatProgressStep', () => {
+        it('formats started step', () => {
+            expect(formatProgressStep({ step: 'started', message: '' })).toBe('[progress] Review started');
+        });
+
+        it('formats analyzing_patch step without file count', () => {
+            expect(formatProgressStep({ step: 'analyzing_patch', message: '' })).toBe('[progress] Analyzing patch');
+        });
+
+        it('formats analyzing_patch step with file count', () => {
+            expect(formatProgressStep({ step: 'analyzing_patch', message: '', details: { fileCount: 5 } }))
+                .toBe('[progress] Analyzing patch (5 files)');
+        });
+
+        it('formats tool_call step with tool name', () => {
+            expect(formatProgressStep({ step: 'tool_call', message: '', details: { tool: 'lint' } }))
+                .toBe('[progress] Running tool: lint');
+        });
+
+        it('formats tool_call step with tool and query', () => {
+            expect(formatProgressStep({ step: 'tool_call', message: '', details: { tool: 'search', query: 'foo' } }))
+                .toBe('[progress] Running tool: search \u2014 foo');
+        });
+
+        it('formats tool_call step without details', () => {
+            expect(formatProgressStep({ step: 'tool_call', message: '' }))
+                .toBe('[progress] Running tool: unknown');
+        });
+
+        it('formats generating_review step', () => {
+            expect(formatProgressStep({ step: 'generating_review', message: '' })).toBe('[progress] Generating review');
+        });
+
+        it('formats completed step', () => {
+            expect(formatProgressStep({ step: 'completed', message: '' })).toBe('[progress] Review completed');
+        });
+
+        it('formats unknown step with message', () => {
+            expect(formatProgressStep({ step: 'other' as any, message: 'Custom event' })).toBe('[progress] Custom event');
         });
     });
 });

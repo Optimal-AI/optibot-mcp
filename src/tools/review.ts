@@ -14,7 +14,7 @@ const ReviewDiffFileSchema = {
     file_path: z.string().describe('Path to the diff or patch file to review'),
 };
 
-function formatProgressStep(event: ReviewProgressEvent): string {
+export function formatProgressStep(event: ReviewProgressEvent): string {
     const prefix = '[progress]';
     switch (event.step) {
         case 'started':
