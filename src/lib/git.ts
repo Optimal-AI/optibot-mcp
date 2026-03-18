@@ -7,6 +7,34 @@ import { GitChangedFile } from '../types.js';
 const exec = promisify(execCb);
 const execFile = promisify(execFileCb);
 
+// Patterns for files that may contain secrets — skipped before uploading for review
+const SENSITIVE_FILENAME_PATTERNS: RegExp[] = [
+    /^\.env(\.|$)/i,           // .env, .env.local, .env.production, etc.
+    /\.pem$/i,                 // TLS/SSH private keys
+    /\.key$/i,                 // Generic key files
+    /\.p12$/i,                 // PKCS#12 keystores
+    /\.pfx$/i,                 // Personal Information Exchange
+    /\.cer$/i,                 // Certificates
+    /\.crt$/i,                 // Certificates
+    /id_rsa(\.pub)?$/i,        // SSH keys
+    /id_ed25519(\.pub)?$/i,    // SSH keys
+    /id_dsa(\.pub)?$/i,        // SSH keys
+    /id_ecdsa(\.pub)?$/i,      // SSH keys
+    /\.secret$/i,              // Generic secret files
+    /credentials(\.json)?$/i,  // AWS/GCP credentials
+    /secrets(\.json|\.yaml|\.yml)?$/i, // Generic secrets
+    /service.?account.*\.json$/i,      // GCP service accounts
+    /\.npmrc$/i,               // npm auth tokens
+    /\.pypirc$/i,              // PyPI credentials
+    /\.netrc$/i,               // Generic credentials
+    /authinfo(\.gpg)?$/i,      // Emacs auth info
+];
+
+export function isSensitiveFile(relativePath: string): boolean {
+    const basename = path.basename(relativePath);
+    return SENSITIVE_FILENAME_PATTERNS.some(pattern => pattern.test(basename));
+}
+
 const BINARY_EXTENSIONS = [
     '.png', '.jpg', '.jpeg', '.gif', '.bmp', '.ico', '.webp', '.tiff', '.tif',
     '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx',
@@ -115,6 +143,11 @@ export async function getFileContents(
 
     for (const file of changedFiles) {
         if (file.status === 'D') continue;
+
+        if (isSensitiveFile(file.relativePath)) {
+            console.error(`[security] Skipping potentially sensitive file: ${file.relativePath}`);
+            continue;
+        }
 
         const absolutePath = path.join(repoRoot, file.relativePath);
 
