@@ -150,37 +150,38 @@ During reviews, the MCP server connects to the Optibot backend via WebSocket and
 
 ## CI/CD Integration
 
-The Optibot MCP server can be used in CI/CD pipelines for automated code reviews. Use the `OPTIBOT_API_KEY` environment variable for headless (non-interactive) authentication — no browser login is needed.
+For automated reviews in CI/CD pipelines (GitHub Actions, GitLab CI, etc.), use the **[Optibot CLI](https://www.npmjs.com/package/@optimalai/optibot)** instead. The CLI is purpose-built for non-interactive environments and runs as a standard command-line tool.
 
-### Setting Up
+The MCP server is designed to run inside AI assistants (Claude Desktop, Cursor, etc.) — it speaks the MCP stdio protocol and is not intended to be invoked directly in a pipeline.
 
-1. Generate an API key from the [Optibot dashboard](https://agents.getoptimal.ai) or using the `create_api_key` tool.
-2. Store it as a secret in your CI provider (e.g., GitHub Actions secret, GitLab CI variable).
-3. Pass it as `OPTIBOT_API_KEY` in your pipeline environment.
+**To use in CI:**
 
-### GitHub Actions Example
+1. Generate an API key from the [Optibot dashboard](https://agents.getoptimal.ai) or with `create_api_key` tool
+2. Add `OPTIBOT_API_KEY` as a repository secret
+3. Use the CLI in your pipeline:
 
 ```yaml
-- name: Optibot Review
+# GitHub Actions
+- name: Install Optibot CLI
+  run: npm install -g @optimalai/optibot
+- name: Run code review
   env:
     OPTIBOT_API_KEY: ${{ secrets.OPTIBOT_API_KEY }}
-  run: npx @optimalai/optibot-mcp
+  run: optibot review --branch origin/${{ github.base_ref }}
 ```
 
-### Other CI Providers
-
-Set the `OPTIBOT_API_KEY` environment variable in your pipeline configuration. The MCP server will automatically use it for authentication without requiring interactive login.
+See the [Optibot CLI README](https://www.npmjs.com/package/@optimalai/optibot) for full CI/CD setup instructions including GitLab CI.
 
 ## Environment Variables
 
 | Variable | Description |
 |----------|-------------|
 | `OPTIBOT_API_KEY` | Your API token (required for automated use) |
-| `OPTIBOT_API_URL` | Custom backend URL (defaults to `https://agents.getoptimal.ai`) |
+| `OPTIBOT_API_URL` | Custom backend URL (must use `https://`, defaults to `https://agents.getoptimal.ai`) |
 
 ## Requirements
 
-- Node.js >= 18
+- Node.js >= 22
 - Git (for review tools)
 
 ## Contributing
