@@ -1,0 +1,2 @@
+# Exclude source maps from published package
+dist/**/*.map
