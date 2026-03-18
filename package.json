@@ -1,6 +1,6 @@
 {
   "name": "@optimalai/optibot-mcp",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "MCP server for AI code reviews powered by Optibot",
   "type": "module",
   "main": "./dist/index.js",
@@ -23,7 +23,7 @@
     "zod": "^3.24.0"
   },
   "devDependencies": {
-    "@types/node": "^20.14.0",
+    "@types/node": "^22.0.0",
     "@vitest/coverage-v8": "^4.0.18",
     "typescript": "^5.5.0",
     "vitest": "^4.0.18"
