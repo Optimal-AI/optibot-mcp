@@ -32,7 +32,10 @@ npm install -g @optimalai/optibot-mcp
 
 ### Claude Desktop
 
-Add to your Claude Desktop configuration (`~/Library/Application Support/Claude/claude_desktop_config.json` on macOS):
+Add to your Claude Desktop configuration:
+
+- **macOS:** `~/Library/Application Support/Claude/claude_desktop_config.json`
+- **Windows:** `%APPDATA%\Claude\claude_desktop_config.json`
 
 ```json
 {
@@ -50,7 +53,10 @@ Add to your Claude Desktop configuration (`~/Library/Application Support/Claude/
 
 ### Cursor
 
-Add to your Cursor MCP configuration (`.cursor/mcp.json`):
+Add to your Cursor MCP configuration:
+
+- **Global (all projects):** `~/.cursor/mcp.json`
+- **Project-level:** `.cursor/mcp.json` in your project root
 
 ```json
 {
@@ -87,14 +93,10 @@ Add to your Windsurf MCP configuration (`~/.codeium/windsurf/mcp_config.json`):
 ### Claude Code
 
 ```bash
-claude mcp add optibot -- npx -y @optimalai/optibot-mcp
+claude mcp add optibot -e OPTIBOT_API_KEY=optk_your_key_here -- npx -y @optimalai/optibot-mcp
 ```
 
-Then set your API key as an environment variable:
-
-```bash
-export OPTIBOT_API_KEY=optk_your_key_here
-```
+The `-e` flag stores the API key in the MCP server config so it is always available when Claude Code spawns the server, regardless of your shell environment.
 
 ## Authentication
 
