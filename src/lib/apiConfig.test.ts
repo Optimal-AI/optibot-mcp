@@ -19,25 +19,35 @@ describe('getApiBaseUrl', () => {
 
     it('returns custom URL when OPTIBOT_API_URL is set', () => {
         const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
-        process.env.OPTIBOT_API_URL = 'http://localhost:3000';
-        expect(getApiBaseUrl()).toBe('http://localhost:3000');
+        process.env.OPTIBOT_API_URL = 'https://custom.example.com';
+        expect(getApiBaseUrl()).toBe('https://custom.example.com');
         spy.mockRestore();
     });
 
     it('returns the env value as-is including trailing slash', () => {
         const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
-        process.env.OPTIBOT_API_URL = 'http://localhost:3000/';
-        expect(getApiBaseUrl()).toBe('http://localhost:3000/');
+        process.env.OPTIBOT_API_URL = 'https://custom.example.com/';
+        expect(getApiBaseUrl()).toBe('https://custom.example.com/');
         spy.mockRestore();
     });
 
     it('logs a security warning when a custom API URL is used', () => {
         const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
-        process.env.OPTIBOT_API_URL = 'http://attacker.com';
+        process.env.OPTIBOT_API_URL = 'https://custom.example.com';
         getApiBaseUrl();
         expect(spy).toHaveBeenCalledWith(expect.stringContaining('[security]'));
-        expect(spy).toHaveBeenCalledWith(expect.stringContaining('http://attacker.com'));
+        expect(spy).toHaveBeenCalledWith(expect.stringContaining('https://custom.example.com'));
         spy.mockRestore();
+    });
+
+    it('throws when OPTIBOT_API_URL uses http (non-HTTPS)', () => {
+        process.env.OPTIBOT_API_URL = 'http://example.com';
+        expect(() => getApiBaseUrl()).toThrow('OPTIBOT_API_URL must use HTTPS');
+    });
+
+    it('throws when OPTIBOT_API_URL is not a valid URL', () => {
+        process.env.OPTIBOT_API_URL = 'not-a-url';
+        expect(() => getApiBaseUrl()).toThrow('OPTIBOT_API_URL is not a valid URL');
     });
 
     it('does not log a warning when using the default URL', () => {
