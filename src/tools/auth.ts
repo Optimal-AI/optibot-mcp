@@ -102,7 +102,7 @@ async function startLocalServer(state: string): Promise<{ code: string; server: 
 
 async function exchangeCodeForToken(code: string, state: string): Promise<TokenResponse> {
     const API_BASE_URL = getApiBaseUrl();
-    const response = await fetch(`${API_BASE_URL}/vscode/token`, {
+    const response = await fetch(`${API_BASE_URL}/client/token`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ code, state }),
@@ -113,7 +113,16 @@ async function exchangeCodeForToken(code: string, state: string): Promise<TokenR
         throw new Error(error.error || `HTTP ${response.status}`);
     }
 
-    return response.json() as Promise<TokenResponse>;
+    const data = await response.json() as any;
+
+    if (data.status === 'onboarding_required') {
+        const err: any = new Error('Account setup required');
+        err.code = 'ONBOARDING_REQUIRED';
+        err.onboardingUrl = data.onboardingUrl;
+        throw err;
+    }
+
+    return data as TokenResponse;
 }
 
 export function registerAuthTools(server: McpServer): void {
@@ -131,7 +140,7 @@ export function registerAuthTools(server: McpServer): void {
                 const { code, server: srv } = await startLocalServer(state);
                 localServer = srv;
 
-                const authUrl = `${API_BASE_URL}/vscode/auth?state=${state}&scheme=http&port=${PORT}`;
+                const authUrl = `${API_BASE_URL}/client/auth?state=${state}&scheme=http&port=${PORT}`;
 
                 // Dynamic import for ESM-only package
                 const { default: open } = await import('open');
@@ -148,6 +157,14 @@ export function registerAuthTools(server: McpServer): void {
 
                 return { content: [{ type: 'text' as const, text: msg }] };
             } catch (err: any) {
+                if (err.code === 'ONBOARDING_REQUIRED') {
+                    return {
+                        content: [{
+                            type: 'text' as const,
+                            text: `Account setup required. Please open this URL to complete setup:\n\n${err.onboardingUrl}\n\nAfter completing setup, run the login tool again.`
+                        }]
+                    };
+                }
                 return { content: [{ type: 'text' as const, text: `Authentication failed: ${err.message}` }], isError: true };
             } finally {
                 if (localServer) {
