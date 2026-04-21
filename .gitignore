@@ -27,3 +27,8 @@ Thumbs.db
 # Editor configs
 .vscode/
 .idea/
+
+# Claude Code / AI assistant files (repo is public — keep these local only)
+CLAUDE.md
+CLAUDE.local.md
+.claude/
