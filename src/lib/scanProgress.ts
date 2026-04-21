@@ -8,7 +8,7 @@ export type ScanProgressCallback = (event: SecurityScanProgressEvent) => void;
 /**
  * Subscribes to the backend's `security-scan-progress` WebSocket channel.
  * Mirrors ReviewProgressService but uses the scan-specific event name and
- * the generic `join` room-subscribe event exposed by optibot-be's socket.
+ * the generic `join` room-subscribe event.
  *
  * Fire-and-forget: if the socket fails to connect within the timeout the
  * session still resolves (the caller continues with the HTTP scan and just
@@ -43,7 +43,7 @@ export class SecurityScanProgressService {
                         clearTimeout(this.connectionTimeout);
                         this.connectionTimeout = null;
                     }
-                    // BE's generic room-join channel (src/utils/socket.ts in optibot-be).
+                    // Generic room-join channel on the backend socket.
                     this.socket!.emit('join', this.sessionId);
                     setTimeout(() => resolve(this.sessionId!), 100);
                 });
