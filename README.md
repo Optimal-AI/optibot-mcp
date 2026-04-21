@@ -19,6 +19,8 @@ Review local changes, compare branches, and get actionable feedback — all from
 - **Review your code** — say "review my changes" and get an AI code review instantly
 - **Compare branches** — "review my branch against main" triggers a full branch diff review
 - **Review patch files** — point it at any `.patch` or `.diff` file
+- **Run AI security scans** — trigger token-metered scans on any repo in your org and get the full markdown report back
+- **Manage organizations** — switch the active org for multi-org accounts
 - **Manage API keys** — create, list, and delete keys for CI/CD automation
 - **Detect merge conflicts** — warns you about conflicts before you review
 
@@ -121,34 +123,85 @@ Once configured, just ask your AI assistant naturally:
 | "review my changes" | Reviews uncommitted local changes |
 | "review my branch against main" | Compares current branch against main |
 | "review this diff file" | Reviews an arbitrary patch file |
-| "check if I'm authenticated" | Shows current auth status |
+| "what's my Optibot status?" | Shows auth method, profile, active org, and daily quota |
+| "which Optibot organizations do I have?" | Lists all orgs (active marked with `*`) |
+| "switch Optibot to the Acme org" | Rescopes your token to that org |
+| "run a security scan on org/repo-a" | Triggers an AI security scan and returns the full report |
+| "show me recent security scans" | Lists recent scans with cost and severity |
+| "how much have we spent on scans this month?" | Shows current-month token usage and cost |
 | "create an API key for CI" | Creates and displays a new API key |
 | "list my API keys" | Lists all API keys with metadata |
 
 ## Available Tools
+
+### Review
 
 | Tool | Description |
 |------|-------------|
 | `review_local_changes` | Review uncommitted local changes (git diff HEAD) |
 | `review_branch` | Review changes against a target branch (auto-detects or specify) |
 | `review_diff_file` | Review an arbitrary diff/patch file |
-| `login` | Authenticate via browser OAuth |
+
+### Auth & status
+
+| Tool | Description |
+|------|-------------|
+| `login` | Authenticate via browser OAuth (handles onboarding redirects) |
 | `logout` | Remove saved credentials |
 | `check_auth` | Check current authentication status |
+| `get_profile` | Get your user profile and review quota status |
+| `get_status` | Full status: auth method, profile, active org, daily quota |
+
+### Organizations
+
+| Tool | Description |
+|------|-------------|
+| `list_organizations` | List all organizations you belong to |
+| `get_current_organization` | Show the active organization (read from the JWT claim) |
+| `switch_organization` | Rescope your token to a different org (by id or name) |
+
+### API keys
+
+| Tool | Description |
+|------|-------------|
 | `create_api_key` | Create a new API key for CI/CD |
 | `list_api_keys` | List all API keys |
 | `delete_api_key` | Delete an API key by ID |
-| `get_profile` | Get your user profile and review quota status |
+
+### Security scans
+
+| Tool | Description |
+|------|-------------|
+| `trigger_security_scan` | Start an AI security scan on a repo; blocks until complete (configurable timeout) |
+| `list_security_scans` | Paginated list of recent scans (optionally filtered by repo) |
+| `get_security_scan` | Full markdown report + metadata for a specific scan id |
+| `get_security_usage` | Current-month token usage and cost |
+| `get_security_pricing` | Per-tier pricing and markup multiplier |
+| `list_scannable_repos` | Repositories available to scan in the active org |
+| `get_security_config` | Scheduled-scan configuration |
+| `update_security_config` | Update the scheduled-scan configuration (partial merge) |
 
 ## Real-Time Progress
 
-During reviews, the MCP server connects to the Optibot backend via WebSocket and emits real-time progress notifications using MCP logging messages. Your MCP client will receive updates as the review progresses through these steps:
+During reviews and security scans, the MCP server connects to the Optibot backend via WebSocket and emits real-time progress notifications using MCP logging messages. Your MCP client will receive updates as the operation progresses.
+
+**Reviews:**
 
 1. **started** — Review request accepted
 2. **analyzing_patch** — Parsing and analyzing the diff
 3. **tool_call** — Running analysis tools (with tool name and query details)
 4. **generating_review** — Generating the final review
 5. **completed** — Review finished
+
+**Security scans:**
+
+1. **started** — Scan request accepted
+2. **cloning_repository** — Fetching the repository
+3. **scanning_code** — Running security analysis
+4. **tool_call** — Individual analyzer tool invocations
+5. **budget_update** — Running token + cost ticker
+6. **generating_report** — Producing the final markdown report
+7. **completed** / **failed** — Final status
 
 ## CI/CD Integration
 
@@ -195,7 +248,7 @@ Contributions are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines
 - [Optibot Website](https://getoptimal.ai/?utm_source=npm&utm_medium=readme&utm_campaign=optibot-mcp)
 - [Sign Up (Free)](https://agents.getoptimal.ai/signup?utm_source=npm&utm_medium=readme&utm_campaign=optibot-mcp)
 - [Report an Issue](https://github.com/Optimal-AI/optibot-mcp/issues)
-- [Optibot CLI on npm](https://www.npmjs.com/package/optibot)
+- [Optibot CLI on npm](https://www.npmjs.com/package/@optimalai/optibot)
 - [Optibot Claude Code Plugin](https://github.com/Optimal-AI/optibot-skill)
 - [Twitter / X](https://x.com/optimaldotai)
 - [LinkedIn](https://www.linkedin.com/company/optimaldotai/)

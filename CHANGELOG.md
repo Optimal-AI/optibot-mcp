@@ -1,5 +1,40 @@
 # Changelog
 
+## [1.2.0] - 2026-04-21
+
+### Added — Feature parity with the Optibot CLI
+
+- **Organization management** — three new tools:
+  - `list_organizations` — list all orgs you belong to; marks the active one
+  - `get_current_organization` — shows the active org (read from the JWT `organizationId` claim)
+  - `switch_organization` — rescopes the token to a different org (by id or name); replaces the stored JWT
+- **Security scans** — eight new tools wrapping the backend's token-metered security-scan endpoints:
+  - `trigger_security_scan` — starts a scan, streams live progress notifications, blocks until complete (configurable `timeoutSeconds`, default 300s); returns a `still_running` handoff on timeout
+  - `list_security_scans`, `get_security_scan` — browse existing scans
+  - `get_security_usage`, `get_security_pricing`, `list_scannable_repos` — read-only accessors
+  - `get_security_config`, `update_security_config` — manage scheduled-scan configuration
+- **`get_status`** — consolidated view matching `optibot status`: auth method, user profile, active organization, and daily review quota in a single tool call
+- **Onboarding support** in `login` — when the backend returns `onboarding_required`, surfaces the setup URL instead of silently failing
+
+### Changed — Auth endpoint migration
+
+- Migrated from legacy `/vscode/*` endpoints to the canonical `/client/*` endpoints:
+  - `/vscode/auth` → `/client/auth`
+  - `/vscode/token` → `/client/token`
+- New endpoints consumed: `/client/organizations`, `/client/token/rescope`
+- Active organization id is now read from the JWT `organizationId` claim (single source of truth) and is never persisted separately
+- `ApiClient.getUserProfile()` renamed to `ApiClient.getProfile()` to match the CLI
+- `check_auth` now surfaces the active organization id (when present in the token)
+
+### Security
+
+- All server-provided strings in tool outputs (emails, org names, error messages, scan report content, etc.) are now stripped of ANSI escapes and control characters via `sanitizeServerText` before being returned in tool results. Tool results feed LLMs, so untrusted terminal escapes are a prompt-injection vector for the consuming model.
+
+### Internal
+
+- New helpers ported from `optibot-cli`: `SecurityScanProgressService` (WebSocket listener for `security-scan-progress`), `waitForScanCompletion` (polling helper for the 202-then-poll scan flow), `mapScanError` (structured error translation with a `ScanErrorKind` tag for LLM branching)
+- New `src/lib/jwt.ts` helper for decoding the JWT payload without persisting it
+
 ## [1.1.0] - 2026-03-18
 
 ### Security
