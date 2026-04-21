@@ -5,6 +5,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { registerReviewTools } from './tools/review.js';
 import { registerAuthTools } from './tools/auth.js';
 import { registerApiKeyTools } from './tools/apikey.js';
+import { registerOrgTools } from './tools/org.js';
 
 const server = new McpServer({
     name: 'optibot',
@@ -14,6 +15,7 @@ const server = new McpServer({
 registerReviewTools(server);
 registerAuthTools(server);
 registerApiKeyTools(server);
+registerOrgTools(server);
 
 async function main() {
     const transport = new StdioServerTransport();
