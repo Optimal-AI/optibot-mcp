@@ -21,6 +21,7 @@ vi.mock('../lib/api.js', () => ({
 
 vi.mock('../lib/output.js', () => ({
     formatError: (...args: any[]) => mockFormatError(...args),
+    sanitizeServerText: (s: string) => s,
 }));
 
 import { registerApiKeyTools } from './apikey.js';
