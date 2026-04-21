@@ -237,5 +237,6 @@ describe('auth tools', () => {
                 blockingServer.close();
             }
         });
+
     });
 });

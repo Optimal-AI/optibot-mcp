@@ -7,6 +7,7 @@ import { registerAuthTools } from './tools/auth.js';
 import { registerApiKeyTools } from './tools/apikey.js';
 import { registerOrgTools } from './tools/org.js';
 import { registerStatusTool } from './tools/status.js';
+import { registerScanTools } from './tools/scan.js';
 
 const server = new McpServer({
     name: 'optibot',
@@ -18,6 +19,7 @@ registerAuthTools(server);
 registerApiKeyTools(server);
 registerOrgTools(server);
 registerStatusTool(server);
+registerScanTools(server);
 
 async function main() {
     const transport = new StdioServerTransport();
