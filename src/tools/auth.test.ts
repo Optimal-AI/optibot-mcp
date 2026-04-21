@@ -1,18 +1,20 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
 const mockReadConfig = vi.fn();
 const mockWriteConfig = vi.fn();
 const mockDeleteConfig = vi.fn();
-const mockGetUserProfile = vi.fn();
+const mockGetProfile = vi.fn();
 const mockGetReviewStatus = vi.fn();
+const mockListOrganizations = vi.fn();
 const mockFormatError = vi.fn();
 const mockFormatResetTime = vi.fn();
+const mockSanitizeServerText = vi.fn((s: string) => s);
+const mockGetOrgIdFromToken = vi.fn();
 
 vi.mock('../lib/config.js', () => ({
-    readConfig: (...args: any[]) => mockReadConfig(...args),
-    writeConfig: (...args: any[]) => mockWriteConfig(...args),
-    deleteConfig: (...args: any[]) => mockDeleteConfig(...args),
+    readConfig: (...args: unknown[]) => mockReadConfig(...args),
+    writeConfig: (...args: unknown[]) => mockWriteConfig(...args),
+    deleteConfig: (...args: unknown[]) => mockDeleteConfig(...args),
 }));
 
 vi.mock('../lib/apiConfig.js', () => ({
@@ -21,31 +23,39 @@ vi.mock('../lib/apiConfig.js', () => ({
 
 vi.mock('../lib/api.js', () => ({
     ApiClient: class {
-        getUserProfile(...args: any[]) { return mockGetUserProfile(...args); }
-        getReviewStatus(...args: any[]) { return mockGetReviewStatus(...args); }
+        getProfile(...args: unknown[]) { return mockGetProfile(...args); }
+        getReviewStatus(...args: unknown[]) { return mockGetReviewStatus(...args); }
+        listOrganizations(...args: unknown[]) { return mockListOrganizations(...args); }
     },
 }));
 
 vi.mock('../lib/output.js', () => ({
-    formatError: (...args: any[]) => mockFormatError(...args),
-    formatResetTime: (...args: any[]) => mockFormatResetTime(...args),
+    formatError: (...args: unknown[]) => mockFormatError(...args),
+    formatResetTime: (...args: unknown[]) => mockFormatResetTime(...args),
+    sanitizeServerText: (...args: unknown[]) => mockSanitizeServerText(...(args as [string])),
+}));
+
+vi.mock('../lib/jwt.js', () => ({
+    getOrganizationIdFromToken: (...args: unknown[]) => mockGetOrgIdFromToken(...args),
 }));
 
 import { registerAuthTools } from './auth.js';
 
 describe('auth tools', () => {
-    let registeredTools: Map<string, Function>;
+    let registeredTools: Map<string, (args: unknown) => Promise<{ content: Array<{ text?: string }>; isError?: boolean }>>;
 
     beforeEach(() => {
         registeredTools = new Map();
+        mockGetOrgIdFromToken.mockReset();
+        mockListOrganizations.mockReset();
 
         const server = {
-            tool: vi.fn((...args: any[]) => {
+            tool: vi.fn((...args: unknown[]) => {
                 const name = args[0] as string;
-                const handler = args[args.length - 1] as Function;
+                const handler = args[args.length - 1] as (a: unknown) => Promise<{ content: Array<{ text?: string }>; isError?: boolean }>;
                 registeredTools.set(name, handler);
             }),
-        } as any;
+        } as unknown as Parameters<typeof registerAuthTools>[0];
 
         registerAuthTools(server);
     });
@@ -100,6 +110,7 @@ describe('auth tools', () => {
 
         it('returns env var status when OPTIBOT_API_KEY is set', async () => {
             process.env.OPTIBOT_API_KEY = 'optk_test_key_123';
+            mockGetOrgIdFromToken.mockReturnValue(null);
 
             const handler = registeredTools.get('check_auth')!;
             const result = await handler({});
@@ -111,12 +122,24 @@ describe('auth tools', () => {
         it('returns config file status when authenticated via file', async () => {
             delete process.env.OPTIBOT_API_KEY;
             mockReadConfig.mockResolvedValue({ apiKey: 'file_key_value' });
+            mockGetOrgIdFromToken.mockReturnValue(null);
 
             const handler = registeredTools.get('check_auth')!;
             const result = await handler({});
 
             expect(result.content[0].text).toContain('config file');
             expect(result.content[0].text).toContain('file_key');
+        });
+
+        it('includes active organization id when present in the token', async () => {
+            delete process.env.OPTIBOT_API_KEY;
+            mockReadConfig.mockResolvedValue({ apiKey: 'tok' });
+            mockGetOrgIdFromToken.mockReturnValue(42);
+
+            const handler = registeredTools.get('check_auth')!;
+            const result = await handler({});
+
+            expect(result.content[0].text).toContain('Active organization id (from token): 42');
         });
 
         it('returns not-authenticated message when no auth found', async () => {
@@ -134,7 +157,7 @@ describe('auth tools', () => {
     describe('get_profile', () => {
         it('returns profile and review quota on success', async () => {
             mockReadConfig.mockResolvedValue({ apiKey: 'key' });
-            mockGetUserProfile.mockResolvedValue({ firebaseUserId: 'u1', email: 'a@b.com', name: 'Alice' });
+            mockGetProfile.mockResolvedValue({ firebaseUserId: 'u1', email: 'a@b.com', name: 'Alice' });
             mockGetReviewStatus.mockResolvedValue({ current: 5, limit: 100, remaining: 95 });
 
             const handler = registeredTools.get('get_profile')!;
@@ -148,7 +171,7 @@ describe('auth tools', () => {
 
         it('omits name when not present', async () => {
             mockReadConfig.mockResolvedValue({ apiKey: 'key' });
-            mockGetUserProfile.mockResolvedValue({ firebaseUserId: 'u1', email: 'a@b.com' });
+            mockGetProfile.mockResolvedValue({ firebaseUserId: 'u1', email: 'a@b.com' });
             mockGetReviewStatus.mockResolvedValue({ current: 0, limit: 10, remaining: 10 });
 
             const handler = registeredTools.get('get_profile')!;
@@ -160,7 +183,7 @@ describe('auth tools', () => {
 
         it('includes reset time when present', async () => {
             mockReadConfig.mockResolvedValue({ apiKey: 'key' });
-            mockGetUserProfile.mockResolvedValue({ firebaseUserId: 'u1', email: 'a@b.com' });
+            mockGetProfile.mockResolvedValue({ firebaseUserId: 'u1', email: 'a@b.com' });
             mockGetReviewStatus.mockResolvedValue({ current: 5, limit: 100, remaining: 95, resetAt: '2026-03-18T00:00:00Z' });
             mockFormatResetTime.mockReturnValue('in 6h 30m');
 
@@ -172,7 +195,7 @@ describe('auth tools', () => {
 
         it('omits reset time when not present', async () => {
             mockReadConfig.mockResolvedValue({ apiKey: 'key' });
-            mockGetUserProfile.mockResolvedValue({ firebaseUserId: 'u1', email: 'a@b.com' });
+            mockGetProfile.mockResolvedValue({ firebaseUserId: 'u1', email: 'a@b.com' });
             mockGetReviewStatus.mockResolvedValue({ current: 0, limit: 10, remaining: 10 });
 
             const handler = registeredTools.get('get_profile')!;

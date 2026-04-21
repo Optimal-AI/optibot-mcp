@@ -269,10 +269,10 @@ describe('ApiClient', () => {
         });
     });
 
-    describe('getUserProfile', () => {
+    describe('getProfile', () => {
         it('sends GET to /api/user/profile with Authorization header', async () => {
             mockOkResponse({ firebaseUserId: 'u1', email: 'a@b.com' });
-            await client.getUserProfile();
+            await client.getProfile();
 
             expect(fetchMock).toHaveBeenCalledWith(
                 'http://test-api.local/api/user/profile',
@@ -286,13 +286,13 @@ describe('ApiClient', () => {
         it('returns parsed profile on success', async () => {
             const profile = { firebaseUserId: 'u1', email: 'a@b.com', name: 'Alice' };
             mockOkResponse(profile);
-            const result = await client.getUserProfile();
+            const result = await client.getProfile();
             expect(result).toEqual(profile);
         });
 
         it('throws error on failure', async () => {
             mockErrorResponse(401, { message: 'Unauthorized' });
-            await expect(client.getUserProfile()).rejects.toThrow('Unauthorized');
+            await expect(client.getProfile()).rejects.toThrow('Unauthorized');
         });
     });
 
