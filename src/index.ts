@@ -8,10 +8,11 @@ import { registerApiKeyTools } from './tools/apikey.js';
 import { registerOrgTools } from './tools/org.js';
 import { registerStatusTool } from './tools/status.js';
 import { registerScanTools } from './tools/scan.js';
+import { registerSetupCiTool } from './tools/setupCi.js';
 
 const server = new McpServer({
     name: 'optibot',
-    version: '1.2.0',
+    version: '1.3.0',
 });
 
 registerReviewTools(server);
@@ -20,6 +21,7 @@ registerApiKeyTools(server);
 registerOrgTools(server);
 registerStatusTool(server);
 registerScanTools(server);
+registerSetupCiTool(server);
 
 async function main() {
     const transport = new StdioServerTransport();
