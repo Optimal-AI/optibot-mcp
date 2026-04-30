@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { readConfig } from '../lib/config.js';
 import { ApiClient } from '../lib/api.js';
 import { formatError, sanitizeServerText } from '../lib/output.js';
+import { renderGithubActionsYaml, renderGitlabCiYaml, renderGenericShell } from '../lib/ci.js';
 
 const CreateApiKeySchema = {
     name: z.string().describe('Name for the API key (e.g., "ci-github-actions", "jenkins-pipeline")'),
@@ -33,6 +34,7 @@ export function registerApiKeyTools(server: McpServer): void {
                 const client = new ApiClient(config.apiKey);
                 const result = await client.createApiKey(name);
 
+                const apiKey = sanitizeServerText(result.key);
                 return {
                     content: [{
                         type: 'text' as const,
@@ -40,12 +42,30 @@ export function registerApiKeyTools(server: McpServer): void {
                             'API key created successfully!',
                             '',
                             `Name:  ${sanitizeServerText(result.name)}`,
-                            `Key:   ${sanitizeServerText(result.key)}`,
+                            `Key:   ${apiKey}`,
                             '',
                             'Copy this key now — it will not be shown again.',
                             '',
                             'To use in CI/CD, set as environment variable:',
-                            `  export OPTIBOT_API_KEY=${sanitizeServerText(result.key)}`,
+                            `  export OPTIBOT_API_KEY=${apiKey}`,
+                            '',
+                            'GitHub Actions (`.github/workflows/optibot.yml`):',
+                            '',
+                            '```yaml',
+                            renderGithubActionsYaml().trimEnd(),
+                            '```',
+                            '',
+                            'GitLab CI (`.gitlab-ci.yml` job):',
+                            '',
+                            '```yaml',
+                            renderGitlabCiYaml().trimEnd(),
+                            '```',
+                            '',
+                            'Generic shell:',
+                            '',
+                            '```bash',
+                            renderGenericShell({ apiKey }).trimEnd(),
+                            '```',
                         ].join('\n')
                     }]
                 };
