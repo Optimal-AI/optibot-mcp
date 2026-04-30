@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.3.0] - 2026-04-30
+
+### Added — Guided CI onboarding
+
+- **New tool: `setup_ci`** — mints a long-lived API key bound to the active organization and returns copy-paste YAML snippets for GitHub Actions and GitLab CI in a single structured response. Pair with `login` for users who just authenticated and need CI wiring.
+- `check_auth` and `login` outputs now reference `setup_ci` so AI hosts route CI questions correctly.
+- `create_api_key` result now includes the same YAML snippets so direct callers get the wiring without an extra round-trip.
+
+### Internal
+
+- New `src/lib/ci.ts` (CI env detection + YAML snippet renderers), mirrored from `optibot-cli` per the project rule that sibling client packages do not share code.
+
 ## [1.2.0] - 2026-04-21
 
 ### Added — Feature parity with the Optibot CLI
