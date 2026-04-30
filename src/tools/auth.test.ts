@@ -152,6 +152,17 @@ describe('auth tools', () => {
             expect(result.content[0].text).toContain('Not authenticated');
             expect(result.content[0].text).toContain('OPTIBOT_API_KEY');
         });
+
+        it('mentions setup_ci when authenticated', async () => {
+            delete process.env.OPTIBOT_API_KEY;
+            mockReadConfig.mockResolvedValue({ apiKey: 'tok' });
+            mockGetOrgIdFromToken.mockReturnValue(null);
+
+            const handler = registeredTools.get('check_auth')!;
+            const result = await handler({});
+
+            expect(result.content[0].text).toContain('setup_ci');
+        });
     });
 
     describe('get_profile', () => {

@@ -190,6 +190,9 @@ export function registerAuthTools(server: McpServer): void {
                     }
                 }
 
+                lines.push('');
+                lines.push('If you\'re setting up Optibot in CI/CD next, ask me to run `setup_ci`.');
+
                 return { content: [{ type: 'text' as const, text: lines.join('\n') }] };
             } catch (err) {
                 const message = err instanceof Error ? err.message : 'Authentication failed';
@@ -241,6 +244,9 @@ export function registerAuthTools(server: McpServer): void {
                 if (typeof orgId === 'number') {
                     lines.push(`Active organization id (from token): ${orgId}`);
                 }
+
+                lines.push('');
+                lines.push('For CI/CD setup, ask me to run `setup_ci` to mint a long-lived API key and get YAML snippets.');
 
                 return { content: [{ type: 'text' as const, text: lines.join('\n') }] };
             } catch {
