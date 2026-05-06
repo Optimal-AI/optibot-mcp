@@ -3,12 +3,7 @@ import { z } from 'zod';
 import { readConfig } from '../lib/config.js';
 import { ApiClient } from '../lib/api.js';
 import { formatError, sanitizeServerText } from '../lib/output.js';
-import {
-    isCiEnvironment,
-    renderGithubActionsYaml,
-    renderGitlabCiYaml,
-    renderGenericShell,
-} from '../lib/ci.js';
+import { isCiEnvironment } from '../lib/ci.js';
 
 const SetupCiSchema = {
     name: z.string().optional().describe('Name for the API key. Default: "ci".'),
@@ -78,24 +73,6 @@ export async function handleSetupCi(input: { name?: string }): Promise<ToolResul
             `export OPTIBOT_API_KEY=${apiKey}`,
             '```',
             '',
-            'GitHub Actions (`.github/workflows/optibot.yml`):',
-            '',
-            '```yaml',
-            renderGithubActionsYaml().trimEnd(),
-            '```',
-            '',
-            'GitLab CI (`.gitlab-ci.yml` job):',
-            '',
-            '```yaml',
-            renderGitlabCiYaml().trimEnd(),
-            '```',
-            '',
-            'Generic shell:',
-            '',
-            '```bash',
-            renderGenericShell({ apiKey }).trimEnd(),
-            '```',
-            '',
             'Add this key to your CI provider\'s secret store as OPTIBOT_API_KEY. ' +
             'The key never expires; revoke it with the `delete_api_key` tool.',
         ];
@@ -108,7 +85,7 @@ export async function handleSetupCi(input: { name?: string }): Promise<ToolResul
 export function registerSetupCiTool(server: McpServer): void {
     (server.tool as unknown as ToolWithSchema<typeof SetupCiSchema>)(
         'setup_ci',
-        'Set up Optibot for CI/CD: mints a long-lived API key and returns copy-paste snippets for GitHub Actions, GitLab CI, and a generic shell. The key is bound to the currently active organization. Use this for any "set up Optibot in CI" / GitHub Actions / GitLab CI question.',
+        'Set up Optibot for CI/CD: mints a long-lived API key bound to the currently active organization and returns the export line ready to paste into the user\'s CI secret store. Use this for any "set up Optibot in CI" / GitHub Actions / GitLab CI / agentic-coder question.',
         SetupCiSchema,
         async (input) => handleSetupCi(input as { name?: string }),
     );

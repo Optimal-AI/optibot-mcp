@@ -103,9 +103,10 @@ describe('setup_ci tool', () => {
         const text = (result.content[0] as { text: string }).text;
         expect(text).toContain('optk_real');
         expect(text).toContain('export OPTIBOT_API_KEY=optk_real');
-        expect(text).toContain('name: Optibot Review');
-        expect(text).toContain('optibot-review:');
-        expect(text).toContain('OPTIBOT_API_KEY');
+        expect(text).toMatch(/secret store as OPTIBOT_API_KEY/);
+        // Snippets removed in this release — must not print YAML.
+        expect(text).not.toContain('name: Optibot Review');
+        expect(text).not.toContain('optibot-review:');
     });
 
     it('uses a provided name', async () => {

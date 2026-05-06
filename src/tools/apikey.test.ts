@@ -64,7 +64,7 @@ describe('apikey tools', () => {
             expect(result.content[0].text).toContain('will not be shown again');
         });
 
-        it('includes YAML snippets in the result', async () => {
+        it('includes the export line and a secret-store hint', async () => {
             mockReadConfig.mockResolvedValue({ apiKey: 'key' });
             mockCreateApiKey.mockResolvedValue({
                 id: 1, name: 'ci', keyPrefix: 'optk', key: 'optk_abc123', createdAt: '2026-01-01',
@@ -73,9 +73,11 @@ describe('apikey tools', () => {
             const handler = registeredTools.get('create_api_key')!;
             const result = await handler({ name: 'ci' });
             const text = result.content[0].text;
-            expect(text).toContain('name: Optibot Review');
-            expect(text).toContain('optibot-review:');
             expect(text).toContain('export OPTIBOT_API_KEY=optk_abc123');
+            expect(text).toMatch(/secret store as OPTIBOT_API_KEY/);
+            // Snippets removed in this release — must not print YAML.
+            expect(text).not.toContain('name: Optibot Review');
+            expect(text).not.toContain('optibot-review:');
         });
 
         it('returns error when not authenticated', async () => {

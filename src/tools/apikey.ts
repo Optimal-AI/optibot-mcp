@@ -3,7 +3,6 @@ import { z } from 'zod';
 import { readConfig } from '../lib/config.js';
 import { ApiClient } from '../lib/api.js';
 import { formatError, sanitizeServerText } from '../lib/output.js';
-import { renderGithubActionsYaml, renderGitlabCiYaml, renderGenericShell } from '../lib/ci.js';
 
 const CreateApiKeySchema = {
     name: z.string().describe('Name for the API key (e.g., "ci-github-actions", "jenkins-pipeline")'),
@@ -47,25 +46,12 @@ export function registerApiKeyTools(server: McpServer): void {
                             'Copy this key now — it will not be shown again.',
                             '',
                             'To use in CI/CD, set as environment variable:',
-                            `  export OPTIBOT_API_KEY=${apiKey}`,
-                            '',
-                            'GitHub Actions (`.github/workflows/optibot.yml`):',
-                            '',
-                            '```yaml',
-                            renderGithubActionsYaml().trimEnd(),
-                            '```',
-                            '',
-                            'GitLab CI (`.gitlab-ci.yml` job):',
-                            '',
-                            '```yaml',
-                            renderGitlabCiYaml().trimEnd(),
-                            '```',
-                            '',
-                            'Generic shell:',
                             '',
                             '```bash',
-                            renderGenericShell({ apiKey }).trimEnd(),
+                            `export OPTIBOT_API_KEY=${apiKey}`,
                             '```',
+                            '',
+                            'Add this key to the user\'s CI provider secret store as OPTIBOT_API_KEY.',
                         ].join('\n')
                     }]
                 };
