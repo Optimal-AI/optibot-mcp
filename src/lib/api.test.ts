@@ -269,33 +269,6 @@ describe('ApiClient', () => {
         });
     });
 
-    describe('getUserProfile', () => {
-        it('sends GET to /api/user/profile with Authorization header', async () => {
-            mockOkResponse({ firebaseUserId: 'u1', email: 'a@b.com' });
-            await client.getUserProfile();
-
-            expect(fetchMock).toHaveBeenCalledWith(
-                'http://test-api.local/api/user/profile',
-                expect.objectContaining({
-                    method: 'GET',
-                    headers: { 'Authorization': 'Bearer test-api-key' },
-                })
-            );
-        });
-
-        it('returns parsed profile on success', async () => {
-            const profile = { firebaseUserId: 'u1', email: 'a@b.com', name: 'Alice' };
-            mockOkResponse(profile);
-            const result = await client.getUserProfile();
-            expect(result).toEqual(profile);
-        });
-
-        it('throws error on failure', async () => {
-            mockErrorResponse(401, { message: 'Unauthorized' });
-            await expect(client.getUserProfile()).rejects.toThrow('Unauthorized');
-        });
-    });
-
     describe('getReviewStatus', () => {
         it('sends GET to /api/user/review-status with Authorization header', async () => {
             mockOkResponse({ current: 5, limit: 100, remaining: 95 });
@@ -338,6 +311,188 @@ describe('ApiClient', () => {
 
             const callBody = JSON.parse(fetchMock.mock.calls[0][1].body);
             expect(callBody.reviewSessionId).toBeUndefined();
+        });
+    });
+
+    describe('listOrganizations', () => {
+        it('sends GET to /client/organizations with Authorization header', async () => {
+            mockOkResponse({ organizations: [], currentOrganizationId: 1 });
+            await client.listOrganizations();
+            expect(fetchMock).toHaveBeenCalledWith(
+                'http://test-api.local/client/organizations',
+                expect.objectContaining({
+                    method: 'GET',
+                    headers: { 'Authorization': 'Bearer test-api-key' },
+                })
+            );
+        });
+
+        it('returns parsed response', async () => {
+            const body = { organizations: [{ id: 1, name: 'Acme' }], currentOrganizationId: 1 };
+            mockOkResponse(body);
+            expect(await client.listOrganizations()).toEqual(body);
+        });
+
+        it('throws on failure', async () => {
+            mockErrorResponse(401);
+            await expect(client.listOrganizations()).rejects.toThrow();
+        });
+    });
+
+    describe('rescopeToken', () => {
+        it('POSTs the organization id to /client/token/rescope', async () => {
+            mockOkResponse({ token: 'new', expiresIn: 7_776_000, organizationId: 42 });
+            await client.rescopeToken(42);
+            expect(fetchMock).toHaveBeenCalledWith(
+                'http://test-api.local/client/token/rescope',
+                expect.objectContaining({
+                    method: 'POST',
+                    body: JSON.stringify({ organizationId: 42 }),
+                    headers: expect.objectContaining({
+                        'Authorization': 'Bearer test-api-key',
+                        'Content-Type': 'application/json',
+                    }),
+                })
+            );
+        });
+
+        it('throws on failure', async () => {
+            mockErrorResponse(403, { message: 'Not a member' });
+            await expect(client.rescopeToken(999)).rejects.toThrow('Not a member');
+        });
+    });
+
+    describe('getSecurityPricing', () => {
+        it('GETs /api/security/pricing', async () => {
+            mockOkResponse({ markupMultiplier: 1, tiers: {} });
+            await client.getSecurityPricing();
+            expect(fetchMock).toHaveBeenCalledWith(
+                'http://test-api.local/api/security/pricing',
+                expect.objectContaining({ method: 'GET' }),
+            );
+        });
+
+        it('throws on failure', async () => {
+            mockErrorResponse(500);
+            await expect(client.getSecurityPricing()).rejects.toThrow();
+        });
+    });
+
+    describe('getSecurityUsage', () => {
+        it('GETs /api/security/usage', async () => {
+            mockOkResponse({ tokensUsed: 0, costUSD: 0, month: 1, year: 2026 });
+            await client.getSecurityUsage();
+            expect(fetchMock).toHaveBeenCalledWith(
+                'http://test-api.local/api/security/usage',
+                expect.objectContaining({ method: 'GET' }),
+            );
+        });
+
+        it('throws on failure', async () => {
+            mockErrorResponse(500);
+            await expect(client.getSecurityUsage()).rejects.toThrow();
+        });
+    });
+
+    describe('listSecurityIssues', () => {
+        it('sends no query string when no params are provided', async () => {
+            mockOkResponse({ items: [], totalItems: 0, page: 1, pageSize: 5, totalPages: 0 });
+            await client.listSecurityIssues();
+            expect(fetchMock).toHaveBeenCalledWith(
+                'http://test-api.local/api/security/issues',
+                expect.anything(),
+            );
+        });
+
+        it('encodes page, pageSize, and repositoryIds into the query string', async () => {
+            mockOkResponse({ items: [], totalItems: 0, page: 2, pageSize: 10, totalPages: 0 });
+            await client.listSecurityIssues({ page: 2, pageSize: 10, repositoryIds: [1, 2, 3] });
+            const url = fetchMock.mock.calls[0][0];
+            expect(url).toContain('page=2');
+            expect(url).toContain('pageSize=10');
+            expect(url).toContain('repositoryIds=1%2C2%2C3');
+        });
+
+        it('omits repositoryIds when the array is empty', async () => {
+            mockOkResponse({ items: [], totalItems: 0, page: 1, pageSize: 5, totalPages: 0 });
+            await client.listSecurityIssues({ page: 1, repositoryIds: [] });
+            const url = fetchMock.mock.calls[0][0];
+            expect(url).not.toContain('repositoryIds');
+        });
+    });
+
+    describe('triggerSecurityScan', () => {
+        it('POSTs the body to /api/security/scan without a session id by default', async () => {
+            mockOkResponse({ message: 'ok', sessionId: null });
+            await client.triggerSecurityScan({ repositoryId: 1 });
+            expect(fetchMock).toHaveBeenCalledWith(
+                'http://test-api.local/api/security/scan',
+                expect.objectContaining({
+                    method: 'POST',
+                    body: JSON.stringify({ repositoryId: 1 }),
+                }),
+            );
+        });
+
+        it('appends the session id to the query string when provided', async () => {
+            mockOkResponse({ message: 'ok', sessionId: 'srv' });
+            await client.triggerSecurityScan({ repositoryId: 1 }, 'abc/def');
+            const url = fetchMock.mock.calls[0][0];
+            expect(url).toContain('/api/security/scan?sessionId=abc%2Fdef');
+        });
+    });
+
+    describe('getSecurityConfig', () => {
+        it('GETs /api/organizations/:id/security-configs', async () => {
+            mockOkResponse({ config: {} });
+            await client.getSecurityConfig(7);
+            expect(fetchMock).toHaveBeenCalledWith(
+                'http://test-api.local/api/organizations/7/security-configs',
+                expect.objectContaining({ method: 'GET' }),
+            );
+        });
+    });
+
+    describe('saveSecurityConfig', () => {
+        it('PUTs the body to /api/organizations/:id/security-configs', async () => {
+            const body = {
+                enabled: true, schedule: 'weekly' as const, postAsIssue: false,
+                modelTier: 'low' as const, maxBudgetUSD: 1, repositoryIds: [1],
+            };
+            mockOkResponse({ message: 'Saved', config: body });
+            await client.saveSecurityConfig(7, body);
+            expect(fetchMock).toHaveBeenCalledWith(
+                'http://test-api.local/api/organizations/7/security-configs',
+                expect.objectContaining({
+                    method: 'PUT',
+                    body: JSON.stringify(body),
+                }),
+            );
+        });
+    });
+
+    describe('listRepositoryStats', () => {
+        it('returns the array directly when the backend returns an array', async () => {
+            mockOkResponse([{ id: 1, name: 'a' }, { id: 2, name: 'b' }] as unknown as Record<string, unknown>);
+            const result = await client.listRepositoryStats(7);
+            expect(result).toEqual([{ id: 1, name: 'a' }, { id: 2, name: 'b' }]);
+        });
+
+        it('unwraps { items: [...] } when the backend uses that envelope', async () => {
+            mockOkResponse({ items: [{ id: 3, name: 'c' }] });
+            const result = await client.listRepositoryStats(7);
+            expect(result).toEqual([{ id: 3, name: 'c' }]);
+        });
+
+        it('returns an empty array for unexpected shapes', async () => {
+            mockOkResponse({ random: 'shape' });
+            const result = await client.listRepositoryStats(7);
+            expect(result).toEqual([]);
+        });
+
+        it('throws on failure', async () => {
+            mockErrorResponse(500);
+            await expect(client.listRepositoryStats(7)).rejects.toThrow();
         });
     });
 });
