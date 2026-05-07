@@ -113,10 +113,14 @@ export function formatError(error: unknown): string {
         msg += 'If you need more reviews, contact us: https://getoptimal.ai/contact';
         return msg;
     } else if (status === 403) {
-        return err?.data?.error || 'No seat assigned. Ask your organization owner to assign you a seat.';
+        // Strip ANSI / control chars from server-supplied text — error
+        // messages flow into MCP tool results that the host LLM ingests.
+        const serverError = typeof err?.data?.error === 'string' ? sanitizeServerText(err.data.error) : '';
+        return serverError || 'No seat assigned. Ask your organization owner to assign you a seat.';
     } else if (status === 402) {
         return 'Your plan does not include code reviews. Please upgrade.';
     }
 
-    return `Error: ${err?.message || 'Unknown error'}`;
+    const safeMessage = typeof err?.message === 'string' ? sanitizeServerText(err.message) : '';
+    return `Error: ${safeMessage || 'Unknown error'}`;
 }

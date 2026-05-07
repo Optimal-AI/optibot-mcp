@@ -5,6 +5,8 @@
  * structured data block the caller can reason about.
  */
 
+import { sanitizeServerText } from './output.js';
+
 export interface ScanErrorInfo {
     /** One-line human-readable summary, safe to render directly. */
     humanMessage: string;
@@ -47,11 +49,16 @@ export function mapScanError(err: unknown): ScanErrorInfo {
     const e = err as RawApiError;
     const status = typeof e?.status === 'number' ? e.status : null;
     const data = e?.data ?? {};
-    const apiMessage = typeof (data as { error?: unknown }).error === 'string'
+    // Backend-supplied strings flow into `humanMessage`, which lands in MCP
+    // tool output and is read by the host LLM. Sanitize at the boundary so
+    // ANSI escapes / control chars from a hostile or compromised backend
+    // can't carry prompt-injection sequences across.
+    const rawApiMessage = typeof (data as { error?: unknown }).error === 'string'
         ? (data as { error: string }).error
         : (typeof (data as { message?: unknown }).message === 'string'
             ? (data as { message: string }).message
             : (e?.message || 'Unknown error'));
+    const apiMessage = sanitizeServerText(rawApiMessage);
 
     const detailsBlock = Object.keys(data).length > 0 ? data : undefined;
 
@@ -81,7 +88,7 @@ export function mapScanError(err: unknown): ScanErrorInfo {
             `  Required:        ${fmtUsd(required)}`,
         ];
         if (typeof topUp === 'string' && topUp.length > 0) {
-            lines.push(`  Top up:          ${topUp}`);
+            lines.push(`  Top up:          ${sanitizeServerText(topUp)}`);
         }
         return {
             humanMessage: lines.join('\n'),
@@ -110,8 +117,8 @@ export function mapScanError(err: unknown): ScanErrorInfo {
         const session = (data as { activeSessionId?: unknown }).activeSessionId;
         const started = (data as { startedAt?: unknown }).startedAt;
         const lines = ['A security scan is already running for this repository.'];
-        if (typeof started === 'string') lines.push(`  Started at: ${started}`);
-        if (typeof session === 'string') lines.push(`  Session id: ${session}`);
+        if (typeof started === 'string') lines.push(`  Started at: ${sanitizeServerText(started)}`);
+        if (typeof session === 'string') lines.push(`  Session id: ${sanitizeServerText(session)}`);
         return {
             humanMessage: lines.join('\n'),
             hint: 'Wait for the running scan to finish, then call `list_security_scans` to view results.',

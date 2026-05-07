@@ -102,4 +102,32 @@ describe('formatScanErrorForTool', () => {
         const rendered = formatScanErrorForTool(info);
         expect(rendered).toBe('Error: naked');
     });
+
+    it('strips ANSI escapes from server-supplied error messages (humanMessage)', () => {
+        const info = mapScanError(apiError(400, { error: '\x1b[31mBad request\x1b[0m\x1b]0;hijack\x07' }));
+        expect(info.humanMessage).toBe('Invalid request: Bad request');
+        expect(info.humanMessage).not.toContain('\x1b');
+    });
+
+    it('strips control chars from a 409 conflict payload', () => {
+        const info = mapScanError(apiError(409, {
+            error: 'busy',
+            startedAt: '2026-05-07T10:00:00Z\x1b[2J',
+            activeSessionId: 'sess-123\x07',
+        }));
+        expect(info.humanMessage).not.toMatch(/[\x00-\x08\x0b-\x1f\x7f]/);
+        expect(info.humanMessage).toContain('2026-05-07T10:00:00Z');
+        expect(info.humanMessage).toContain('sess-123');
+    });
+
+    it('strips control chars from a 402 top-up URL', () => {
+        const info = mapScanError(apiError(402, {
+            error: 'Insufficient credits',
+            currentBalanceUSD: 0,
+            requiredUSD: 1,
+            topUpUrl: 'https://example.com/top-up\x1b[1m',
+        }));
+        expect(info.humanMessage).toContain('https://example.com/top-up');
+        expect(info.humanMessage).not.toContain('\x1b');
+    });
 });
