@@ -146,11 +146,10 @@ Once configured, just ask your AI assistant naturally:
 
 | Tool | Description |
 |------|-------------|
-| `login` | Authenticate via browser OAuth (handles onboarding redirects) |
+| `login` | Authenticate via browser OAuth (handles onboarding redirects; refuses inside CI environments) |
 | `logout` | Remove saved credentials |
 | `check_auth` | Check current authentication status |
-| `get_profile` | Get your user profile and review quota status |
-| `get_status` | Full status: auth method, profile, active org, daily quota |
+| `get_status` | Full status: auth method, active org, daily quota |
 
 ### Organizations
 
@@ -160,11 +159,17 @@ Once configured, just ask your AI assistant naturally:
 | `get_current_organization` | Show the active organization (read from the JWT claim) |
 | `switch_organization` | Rescope your token to a different org (by id or name) |
 
+### CI/CD setup
+
+| Tool | Description |
+|------|-------------|
+| `setup_ci` | Recommended onboarding for CI/CD — mints a long-lived API key bound to the active organization and returns the export line ready to paste into the user's CI secret store. Refuses inside CI environments. |
+
 ### API keys
 
 | Tool | Description |
 |------|-------------|
-| `create_api_key` | Create a new API key for CI/CD |
+| `create_api_key` | Create a new API key (lower-level primitive; prefer `setup_ci` for CI onboarding) |
 | `list_api_keys` | List all API keys |
 | `delete_api_key` | Delete an API key by ID |
 
