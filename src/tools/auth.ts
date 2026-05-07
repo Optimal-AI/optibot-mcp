@@ -11,16 +11,44 @@ import { AuthResponse, TokenResponse } from '../types.js';
 
 const PORT = 8080;
 
+function statesMatch(a: string, b: string): boolean {
+    if (a.length !== b.length) return false;
+    return crypto.timingSafeEqual(Buffer.from(a), Buffer.from(b));
+}
+
+const ALLOWED_HOSTS = new Set([
+    `localhost:${PORT}`,
+    `127.0.0.1:${PORT}`,
+]);
+
 async function startLocalServer(state: string): Promise<{ code: string; server: http.Server }> {
     return new Promise((resolve, reject) => {
         const server = http.createServer((req, res) => {
+            // Reject anything but GET — narrows the surface against any local
+            // process or browser-side form abuse poking at the callback port.
+            if (req.method !== 'GET') {
+                res.writeHead(405, { 'Content-Type': 'text/plain', 'Allow': 'GET' });
+                res.end('Method Not Allowed');
+                return;
+            }
+
+            // Host-header check defends against DNS-rebinding scenarios where
+            // a remote page tricks the browser into talking to 127.0.0.1.
+            // State is the real secret, but pinning Host costs nothing.
+            const host = req.headers.host || '';
+            if (!ALLOWED_HOSTS.has(host)) {
+                res.writeHead(400, { 'Content-Type': 'text/plain' });
+                res.end('Bad Host');
+                return;
+            }
+
             const url = new URL(req.url || '', `http://localhost:${PORT}`);
 
             if (url.pathname === '/callback') {
                 const code = url.searchParams.get('code');
                 const returnedState = url.searchParams.get('state');
 
-                if (!code || returnedState !== state) {
+                if (!code || !returnedState || !statesMatch(returnedState, state)) {
                     res.writeHead(400, { 'Content-Type': 'text/html' });
                     res.end('<h1>Authentication Failed</h1><p>Invalid or missing parameters.</p>');
                     reject(new Error('Invalid callback parameters'));
