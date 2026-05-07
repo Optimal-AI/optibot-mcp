@@ -1,10 +1,9 @@
-import { exec as execCb, execFile as execFileCb } from 'child_process';
+import { execFile as execFileCb } from 'child_process';
 import { promisify } from 'util';
 import * as path from 'path';
 import * as fs from 'fs/promises';
 import { GitChangedFile } from '../types.js';
 
-const exec = promisify(execCb);
 const execFile = promisify(execFileCb);
 
 // Patterns for files that may contain secrets — skipped before uploading for review
@@ -35,6 +34,38 @@ export function isSensitiveFile(relativePath: string): boolean {
     return SENSITIVE_FILENAME_PATTERNS.some(pattern => pattern.test(basename));
 }
 
+/**
+ * Reject ref names that could be mistaken for git CLI options or contain
+ * shell-meaningful characters. `execFile` blocks shell injection, but a ref
+ * starting with `-` (or containing a colon, space, or path-traversal
+ * sequence) can still be parsed by git as an option or coerced into
+ * unintended behavior. Combined with `--end-of-options` at each call site
+ * this is defense in depth.
+ *
+ * Rules drawn from `git check-ref-format` (a strict permissive subset):
+ *   - non-empty, doesn't start with `-`
+ *   - no whitespace, no NUL, no shell metas (`;`, `|`, `&`, `$`, backtick, etc.)
+ *   - no `..` (revision range syntax is built explicitly elsewhere)
+ *   - no leading or trailing slash, no `//`
+ */
+export function assertSafeRefName(ref: string): void {
+    if (typeof ref !== 'string' || ref.length === 0) {
+        throw new Error('Invalid branch name: must be a non-empty string');
+    }
+    if (ref.startsWith('-')) {
+        throw new Error(`Invalid branch name: must not start with "-" (got: ${ref})`);
+    }
+    if (ref.includes('..') || ref.includes('//') || ref.startsWith('/') || ref.endsWith('/')) {
+        throw new Error(`Invalid branch name: contains a forbidden sequence (got: ${ref})`);
+    }
+    // Whitelist: letters, digits, and the punctuation git refs commonly use.
+    // Excludes shell metas, NUL, whitespace, control chars, and `:`/`?`/`*`/`[`
+    // which git itself disallows.
+    if (!/^[A-Za-z0-9._/+@~\-]+$/.test(ref)) {
+        throw new Error(`Invalid branch name: contains forbidden characters (got: ${ref})`);
+    }
+}
+
 const BINARY_EXTENSIONS = [
     '.png', '.jpg', '.jpeg', '.gif', '.bmp', '.ico', '.webp', '.tiff', '.tif',
     '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx',
@@ -49,7 +80,7 @@ const BINARY_EXTENSIONS = [
 
 export async function getRepoRoot(): Promise<string> {
     try {
-        const { stdout } = await exec('git rev-parse --show-toplevel');
+        const { stdout } = await execFile('git', ['rev-parse', '--show-toplevel']);
         return stdout.trim();
     } catch {
         throw new Error('Not a git repository (or git is not installed)');
@@ -62,7 +93,7 @@ export async function getRepoName(): Promise<string> {
 }
 
 export async function getDiffHead(repoRoot: string): Promise<string> {
-    const { stdout } = await exec('git diff HEAD', {
+    const { stdout } = await execFile('git', ['diff', 'HEAD'], {
         cwd: repoRoot,
         maxBuffer: 50 * 1024 * 1024,
     });
@@ -70,7 +101,8 @@ export async function getDiffHead(repoRoot: string): Promise<string> {
 }
 
 export async function getDiffBranch(targetBranch: string, repoRoot: string): Promise<string> {
-    const { stdout } = await execFile('git', ['diff', targetBranch], {
+    assertSafeRefName(targetBranch);
+    const { stdout } = await execFile('git', ['diff', '--end-of-options', targetBranch], {
         cwd: repoRoot,
         maxBuffer: 50 * 1024 * 1024,
     });
@@ -93,28 +125,29 @@ export async function getChangedFiles(repoRoot: string, targetBranch?: string): 
     const changesMap = new Map<string, GitChangedFile>();
 
     if (targetBranch) {
+        assertSafeRefName(targetBranch);
         // Committed changes since divergence
         const { stdout: committedOutput } = await execFile(
-            'git', ['diff', '--name-status', `${targetBranch}...HEAD`],
+            'git', ['diff', '--name-status', '--end-of-options', `${targetBranch}...HEAD`],
             { cwd: repoRoot }
         );
         parseNameStatus(committedOutput, changesMap);
 
         // Uncommitted changes (override committed for same file)
-        const { stdout: uncommittedOutput } = await exec(
-            'git diff --name-status HEAD',
+        const { stdout: uncommittedOutput } = await execFile(
+            'git', ['diff', '--name-status', 'HEAD'],
             { cwd: repoRoot }
         );
         parseNameStatus(uncommittedOutput, changesMap);
     } else {
         // Local mode: staged + unstaged vs HEAD
-        const { stdout } = await exec('git diff --name-status HEAD', { cwd: repoRoot });
+        const { stdout } = await execFile('git', ['diff', '--name-status', 'HEAD'], { cwd: repoRoot });
         parseNameStatus(stdout, changesMap);
     }
 
     // Untracked files
-    const { stdout: untrackedOutput } = await exec(
-        'git ls-files --others --exclude-standard',
+    const { stdout: untrackedOutput } = await execFile(
+        'git', ['ls-files', '--others', '--exclude-standard'],
         { cwd: repoRoot }
     );
     for (const line of untrackedOutput.split('\n').filter(l => l.trim())) {
@@ -165,7 +198,7 @@ export async function getFileContents(
 
 export async function getRemoteBranches(repoRoot: string): Promise<string[]> {
     try {
-        const { stdout } = await exec('git branch -r', { cwd: repoRoot });
+        const { stdout } = await execFile('git', ['branch', '-r'], { cwd: repoRoot });
         return stdout
             .split('\n')
             .map(line => line.trim())
@@ -188,10 +221,11 @@ export async function detectBaseBranch(repoRoot: string): Promise<string> {
 }
 
 export async function checkMergeConflicts(targetBranch: string, repoRoot: string): Promise<boolean> {
+    assertSafeRefName(targetBranch);
     try {
         // Use git merge-tree (Git 2.38+) for non-destructive conflict check
         const { stdout } = await execFile(
-            'git', ['merge-tree', '--write-tree', 'HEAD', targetBranch],
+            'git', ['merge-tree', '--write-tree', '--end-of-options', 'HEAD', targetBranch],
             { cwd: repoRoot }
         );
         return stdout.includes('<<<<<<<') || stdout.includes('=======') || stdout.includes('>>>>>>>');
@@ -205,18 +239,18 @@ export async function checkMergeConflicts(targetBranch: string, repoRoot: string
         // Fallback: check for overlapping file changes
         try {
             const { stdout: mergeBase } = await execFile(
-                'git', ['merge-base', 'HEAD', targetBranch],
+                'git', ['merge-base', '--end-of-options', 'HEAD', targetBranch],
                 { cwd: repoRoot }
             );
             const base = mergeBase.trim();
 
             const { stdout: ourChanges } = await execFile(
-                'git', ['diff', '--name-only', `${base}...HEAD`],
+                'git', ['diff', '--name-only', '--end-of-options', `${base}...HEAD`],
                 { cwd: repoRoot }
             );
 
             const { stdout: theirChanges } = await execFile(
-                'git', ['diff', '--name-only', `${base}...${targetBranch}`],
+                'git', ['diff', '--name-only', '--end-of-options', `${base}...${targetBranch}`],
                 { cwd: repoRoot }
             );
 
