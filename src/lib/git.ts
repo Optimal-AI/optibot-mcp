@@ -168,11 +168,18 @@ function parseNameStatus(output: string, map: Map<string, GitChangedFile>): void
     }
 }
 
+// Soft cap on the total size of file contents we'll upload alongside a diff.
+// Stops a poorly-scoped repo (vendored bundles, large fixtures) from sending
+// hundreds of MB across the wire before the backend rejects.
+const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
+
 export async function getFileContents(
     changedFiles: GitChangedFile[],
     repoRoot: string
 ): Promise<Record<string, string>> {
     const contents: Record<string, string> = {};
+    let totalBytes = 0;
+    let truncated = 0;
 
     for (const file of changedFiles) {
         if (file.status === 'D') continue;
@@ -187,10 +194,21 @@ export async function getFileContents(
         if (await isBinaryFile(absolutePath)) continue;
 
         try {
-            contents[file.relativePath] = await fs.readFile(absolutePath, 'utf-8');
+            const content = await fs.readFile(absolutePath, 'utf-8');
+            const size = Buffer.byteLength(content, 'utf-8');
+            if (totalBytes + size > MAX_UPLOAD_BYTES) {
+                truncated += 1;
+                continue;
+            }
+            contents[file.relativePath] = content;
+            totalBytes += size;
         } catch {
             // Skip files we can't read
         }
+    }
+
+    if (truncated > 0) {
+        console.error(`[upload] Skipped ${truncated} file(s) — total upload would exceed ${MAX_UPLOAD_BYTES / (1024 * 1024)} MB.`);
     }
 
     return contents;
