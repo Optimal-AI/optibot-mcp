@@ -107,11 +107,13 @@ export function registerApiKeyTools(server: McpServer): void {
             // ANSI/control chars before either path so a hallucinated or
             // attacker-controlled id can't carry escape sequences into the
             // host's prompt context.
+            // Sanitize once at the boundary; reuse everywhere — both the
+            // network call (URL path) and the echoed success message.
             const safeId = sanitizeServerText(id);
             try {
                 const config = await readConfig();
                 const client = new ApiClient(config.apiKey);
-                await client.deleteApiKey(id);
+                await client.deleteApiKey(safeId);
 
                 return { content: [{ type: 'text' as const, text: `API key ${safeId} deleted successfully.` }] };
             } catch (err) {
