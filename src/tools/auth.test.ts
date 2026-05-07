@@ -31,7 +31,7 @@ vi.mock('../lib/jwt.js', () => ({
     getOrganizationIdFromToken: (...args: unknown[]) => mockGetOrgIdFromToken(...args),
 }));
 
-import { registerAuthTools } from './auth.js';
+import { registerAuthTools, statesMatch, isAllowedHost } from './auth.js';
 
 describe('auth tools', () => {
     let registeredTools: Map<string, (args: unknown) => Promise<{ content: Array<{ text?: string }>; isError?: boolean }>>;
@@ -213,5 +213,47 @@ describe('auth tools', () => {
             }
         });
 
+    });
+
+    describe('statesMatch', () => {
+        it('returns true for identical strings', () => {
+            expect(statesMatch('abc123', 'abc123')).toBe(true);
+        });
+
+        it('returns false for different strings of equal length', () => {
+            expect(statesMatch('abc123', 'xyz789')).toBe(false);
+        });
+
+        it('returns false for different lengths (no timingSafeEqual call)', () => {
+            // crypto.timingSafeEqual would throw on length mismatch — the
+            // helper short-circuits first.
+            expect(statesMatch('abc', 'abcd')).toBe(false);
+        });
+
+        it('returns true for empty strings', () => {
+            expect(statesMatch('', '')).toBe(true);
+        });
+    });
+
+    describe('isAllowedHost', () => {
+        it('accepts the loopback host on the OAuth port', () => {
+            expect(isAllowedHost('127.0.0.1:8080')).toBe(true);
+            expect(isAllowedHost('localhost:8080')).toBe(true);
+        });
+
+        it('rejects loopback on a different port', () => {
+            expect(isAllowedHost('127.0.0.1:8081')).toBe(false);
+            expect(isAllowedHost('localhost:9000')).toBe(false);
+        });
+
+        it('rejects external hosts (DNS-rebinding defense)', () => {
+            expect(isAllowedHost('evil.example.com:8080')).toBe(false);
+            expect(isAllowedHost('attacker.com')).toBe(false);
+        });
+
+        it('rejects empty / undefined Host header', () => {
+            expect(isAllowedHost(undefined)).toBe(false);
+            expect(isAllowedHost('')).toBe(false);
+        });
     });
 });

@@ -12,7 +12,7 @@ import { registerSetupCiTool } from './tools/setupCi.js';
 
 const server = new McpServer({
     name: 'optibot',
-    version: '1.3.0',
+    version: '1.3.1',
 });
 
 registerReviewTools(server);

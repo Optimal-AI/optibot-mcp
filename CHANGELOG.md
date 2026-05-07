@@ -1,5 +1,26 @@
 # Changelog
 
+## [1.3.1] - 2026-05-07
+
+### Security
+
+- **Sanitize backend error text before it reaches MCP tool output.** ANSI escapes / control chars in server-supplied error strings were flowing straight into `formatError()` and `mapScanError()` output and into MCP tool results that the host LLM ingests. Closes a prompt-injection vector that opens up if a custom `OPTIBOT_API_URL` is hostile or compromised.
+- **Block git argument-injection on caller-supplied refs.** Branch names from `review_branch` are now validated against a strict ref-name whitelist (no leading `-`, no shell metas, no `..`) and every git invocation that takes a user-supplied ref now uses `--end-of-options`. `execFile` blocks shell injection but not argument injection — a value like `--upload-pack=evil` was previously parsed by git as an option.
+- **No shell spawned for git in `lib/git.ts`.** All git invocations now use `execFile` directly with an argv array, no shell at all.
+- **Harden the OAuth callback server.** State comparison switched to `crypto.timingSafeEqual`; non-GET methods rejected; `Host` header pinned to `127.0.0.1:8080` / `localhost:8080` (defense in depth against DNS-rebinding scenarios).
+- **Warn on private-host `OPTIBOT_API_URL`.** When the env override points at loopback, RFC1918, or link-local addresses, a second `[security]` warning is logged on top of the existing custom-URL warning.
+- **Cap aggregate upload size in `getFileContents`.** 25 MB soft cap across all uploaded file contents per review — stops a poorly-scoped repo from streaming hundreds of MB to the backend.
+- **`npm audit fix`** — clears 8 transitive advisories (`path-to-regexp` ReDoS, `hono` cookie-name validation, `@hono/node-server` middleware bypass, `ip-address` XSS, etc.).
+- **CI hygiene:** SHA-pin `actions/checkout` and `actions/setup-node`, set workflow-level `permissions: contents: read`, enable Dependabot for npm + github-actions.
+
+### Documentation
+
+- README now flags that `create_api_key` / `setup_ci` output lands in the host's conversation transcript and recommends rotating after copying.
+
+### Removed (housekeeping)
+
+- Untrack `.claude/settings.local.json` — it was tracked from before the gitignore rule was added; now matches the public-repo posture rule.
+
 ## [1.3.0] - 2026-04-30
 
 ### Removed

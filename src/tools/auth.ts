@@ -11,7 +11,10 @@ import { AuthResponse, TokenResponse } from '../types.js';
 
 const PORT = 8080;
 
-function statesMatch(a: string, b: string): boolean {
+// Exported for tests. Constant-time equality on equal-length inputs;
+// short-circuits to false on length mismatch (which is also constant-time
+// because length is checked before any byte comparison).
+export function statesMatch(a: string, b: string): boolean {
     if (a.length !== b.length) return false;
     return crypto.timingSafeEqual(Buffer.from(a), Buffer.from(b));
 }
@@ -20,6 +23,12 @@ const ALLOWED_HOSTS = new Set([
     `localhost:${PORT}`,
     `127.0.0.1:${PORT}`,
 ]);
+
+// Exported for tests.
+export function isAllowedHost(host: string | undefined): boolean {
+    if (!host) return false;
+    return ALLOWED_HOSTS.has(host);
+}
 
 async function startLocalServer(state: string): Promise<{ code: string; server: http.Server }> {
     return new Promise((resolve, reject) => {
@@ -35,8 +44,7 @@ async function startLocalServer(state: string): Promise<{ code: string; server: 
             // Host-header check defends against DNS-rebinding scenarios where
             // a remote page tricks the browser into talking to 127.0.0.1.
             // State is the real secret, but pinning Host costs nothing.
-            const host = req.headers.host || '';
-            if (!ALLOWED_HOSTS.has(host)) {
+            if (!isAllowedHost(req.headers.host)) {
                 res.writeHead(400, { 'Content-Type': 'text/plain' });
                 res.end('Bad Host');
                 return;

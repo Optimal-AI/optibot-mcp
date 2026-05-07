@@ -173,6 +173,8 @@ Once configured, just ask your AI assistant naturally:
 | `list_api_keys` | List all API keys |
 | `delete_api_key` | Delete an API key by ID |
 
+> ⚠️ **Heads up:** `create_api_key` and `setup_ci` return the full secret in the tool output — by design, since you have to copy it. That output then lives in your AI host's conversation transcript (Claude Desktop, Cursor, etc.), which may be persisted, synced, or backed up. Copy the key into your CI secret store, then **delete the conversation or rotate the key with `delete_api_key`** if you don't want it lingering in transcript history.
+
 ### Security scans
 
 | Tool | Description |
