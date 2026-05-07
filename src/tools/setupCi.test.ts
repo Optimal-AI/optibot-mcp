@@ -92,7 +92,7 @@ describe('setup_ci tool', () => {
         expect(mockReadConfig).not.toHaveBeenCalled();
     });
 
-    it('mints a key with default name "ci" and returns key + snippets', async () => {
+    it('mints a key with default name "ci" and returns key + export line', async () => {
         mockReadConfig.mockResolvedValue({ apiKey: 'jwt' });
         mockCreateApiKey.mockResolvedValue({
             id: 1, name: 'ci', keyPrefix: 'optk_x', key: 'optk_real', createdAt: '2026-04-30',

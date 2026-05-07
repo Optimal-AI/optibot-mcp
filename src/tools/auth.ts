@@ -265,7 +265,7 @@ export function registerAuthTools(server: McpServer): void {
                 }
 
                 lines.push('');
-                lines.push('For CI/CD setup, ask me to run `setup_ci` to mint a long-lived API key and get YAML snippets.');
+                lines.push('For CI/CD setup, ask me to run `setup_ci` to mint a long-lived API key bound to the active organization.');
 
                 return { content: [{ type: 'text' as const, text: lines.join('\n') }] };
             } catch {
