@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.3.2] - 2026-05-08
+
+### Packaging
+
+- **Ship `CHANGELOG.md` and `SECURITY.md` in the published tarball.** 1.3.1 only included `dist/`, README, and LICENSE because `files` in `package.json` was too narrow. Users installing from npm now have version history and the security-disclosure policy locally available.
+- README now links to the changelog.
+
 ## [1.3.1] - 2026-05-07
 
 ### Security

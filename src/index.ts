@@ -17,7 +17,7 @@ import { registerSetupCiTool } from './tools/setupCi.js';
 const server = new McpServer(
     {
         name: 'optibot',
-        version: '1.3.1',
+        version: '1.3.2',
     },
     {
         capabilities: {

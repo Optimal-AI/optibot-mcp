@@ -246,6 +246,10 @@ See the [Optibot CLI README](https://www.npmjs.com/package/@optimalai/optibot) f
 - Node.js >= 22
 - Git (for review tools)
 
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md) for the full release history. Security disclosures: [SECURITY.md](SECURITY.md).
+
 ## Contributing
 
 Contributions are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
