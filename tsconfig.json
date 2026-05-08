@@ -11,7 +11,8 @@
     "declaration": true,
     "esModuleInterop": true,
     "resolveJsonModule": true,
-    "moduleResolution": "NodeNext"
+    "moduleResolution": "NodeNext",
+    "types": ["node"]
   },
   "exclude": ["node_modules", "dist", "src/**/*.test.ts", "vitest.config.ts"]
 }
