@@ -7,6 +7,7 @@ import { getOrganizationIdFromToken } from '../lib/jwt.js';
 import { mapScanError, formatScanErrorForTool, ScanErrorInfo } from '../lib/scanErrors.js';
 import { waitForScanCompletion } from '../lib/scanPoller.js';
 import { SecurityScanProgressService } from '../lib/scanProgress.js';
+import { safeSendLog } from '../lib/notify.js';
 import {
     RepositoryStats,
     ScanTriggerRequest,
@@ -259,18 +260,7 @@ export function registerScanTools(server: McpServer): void {
 
             const progressService = new SecurityScanProgressService();
             const sessionId = await progressService.startSession((event) => {
-                try {
-                    extra.sendNotification?.({
-                        method: 'notifications/message' as const,
-                        params: {
-                            level: 'info',
-                            logger: 'optibot',
-                            data: formatProgressStep(event),
-                        },
-                    });
-                } catch {
-                    // Notification delivery is best-effort.
-                }
+                safeSendLog(extra, 'optibot', formatProgressStep(event));
             });
 
             try {

@@ -10,10 +10,21 @@ import { registerStatusTool } from './tools/status.js';
 import { registerScanTools } from './tools/scan.js';
 import { registerSetupCiTool } from './tools/setupCi.js';
 
-const server = new McpServer({
-    name: 'optibot',
-    version: '1.3.1',
-});
+// `logging: {}` advertises the logging capability so the SDK accepts our
+// `notifications/message` events emitted by ReviewProgressService /
+// SecurityScanProgressService. Without it, the very first progress event
+// throws synchronously from inside the SDK and kills the process.
+const server = new McpServer(
+    {
+        name: 'optibot',
+        version: '1.3.1',
+    },
+    {
+        capabilities: {
+            logging: {},
+        },
+    },
+);
 
 registerReviewTools(server);
 registerAuthTools(server);

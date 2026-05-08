@@ -32,3 +32,4 @@ Thumbs.db
 CLAUDE.md
 CLAUDE.local.md
 .claude/
+/.smoke-prod.mjs

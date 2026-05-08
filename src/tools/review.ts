@@ -5,6 +5,7 @@ import * as git from '../lib/git.js';
 import { ApiClient } from '../lib/api.js';
 import { formatReview, formatError } from '../lib/output.js';
 import { ReviewProgressService, ReviewProgressEvent } from '../lib/reviewProgress.js';
+import { safeSendLog } from '../lib/notify.js';
 
 const ReviewBranchSchema = {
     branch: z.string().optional().describe('Target branch to compare against. If omitted, auto-detects origin/main, origin/master, or origin/develop.'),
@@ -56,18 +57,7 @@ export function registerReviewTools(server: McpServer): void {
                 // Start progress session
                 const progressService = new ReviewProgressService();
                 const reviewSessionId = await progressService.startSession((event: ReviewProgressEvent) => {
-                    try {
-                        extra.sendNotification({
-                            method: 'notifications/message' as const,
-                            params: {
-                                level: 'info',
-                                logger: 'optibot',
-                                data: formatProgressStep(event),
-                            },
-                        });
-                    } catch {
-                        // Notification delivery is best-effort
-                    }
+                    safeSendLog(extra, 'optibot', formatProgressStep(event));
                 });
 
                 try {
@@ -116,18 +106,7 @@ export function registerReviewTools(server: McpServer): void {
                 // Start progress session
                 const progressService = new ReviewProgressService();
                 const reviewSessionId = await progressService.startSession((event: ReviewProgressEvent) => {
-                    try {
-                        extra.sendNotification({
-                            method: 'notifications/message' as const,
-                            params: {
-                                level: 'info',
-                                logger: 'optibot',
-                                data: formatProgressStep(event),
-                            },
-                        });
-                    } catch {
-                        // Notification delivery is best-effort
-                    }
+                    safeSendLog(extra, 'optibot', formatProgressStep(event));
                 });
 
                 try {
@@ -169,18 +148,7 @@ export function registerReviewTools(server: McpServer): void {
                 // Start progress session
                 const progressService = new ReviewProgressService();
                 const reviewSessionId = await progressService.startSession((event: ReviewProgressEvent) => {
-                    try {
-                        extra.sendNotification({
-                            method: 'notifications/message' as const,
-                            params: {
-                                level: 'info',
-                                logger: 'optibot',
-                                data: formatProgressStep(event),
-                            },
-                        });
-                    } catch {
-                        // Notification delivery is best-effort
-                    }
+                    safeSendLog(extra, 'optibot', formatProgressStep(event));
                 });
 
                 try {

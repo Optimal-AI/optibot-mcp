@@ -52,11 +52,22 @@ export function registerStatusTool(server: McpServer): void {
 
                 if (reviewStatusResult.status === 'fulfilled') {
                     const rs = reviewStatusResult.value as ReviewStatus;
-                    lines.push('', '## Review Quota', '');
-                    lines.push(`Used: ${rs.current} / ${rs.limit}`);
-                    lines.push(`Remaining: ${rs.remaining}`);
-                    if (rs.resetAt) {
-                        lines.push(`Resets: ${formatResetTime(rs.resetAt)}`);
+                    // Backend response shape can vary across deployments; only render
+                    // numeric fields that are actually present so we don't surface
+                    // "undefined / undefined" to the LLM.
+                    const hasUsage = typeof rs?.current === 'number' && typeof rs?.limit === 'number';
+                    const hasRemaining = typeof rs?.remaining === 'number';
+                    if (hasUsage || hasRemaining || rs?.resetAt) {
+                        lines.push('', '## Review Quota', '');
+                        if (hasUsage) {
+                            lines.push(`Used: ${rs.current} / ${rs.limit}`);
+                        }
+                        if (hasRemaining) {
+                            lines.push(`Remaining: ${rs.remaining}`);
+                        }
+                        if (rs.resetAt) {
+                            lines.push(`Resets: ${formatResetTime(rs.resetAt)}`);
+                        }
                     }
                 }
 

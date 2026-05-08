@@ -137,4 +137,42 @@ describe('status tool', () => {
         expect(result.isError).toBe(true);
         expect(result.content[0].text).toContain('formatted: Not authenticated');
     });
+
+    it('skips the Review Quota section when backend response has none of the numeric fields', async () => {
+        // Defends against the dev-backend response shape that returned an
+        // object missing `current`/`limit`/`remaining`, producing
+        // "Used: undefined / undefined" in the rendered output.
+        delete process.env.OPTIBOT_API_KEY;
+        mockReadConfig.mockResolvedValue({ apiKey: 'k' });
+        mockListOrganizations.mockResolvedValue({
+            organizations: [{ id: 1, name: 'Acme' }],
+            currentOrganizationId: 1,
+        });
+        mockGetReviewStatus.mockResolvedValue({});
+        mockGetOrgIdFromToken.mockReturnValue(1);
+
+        const result = await registered.get('get_status')!({});
+        const text = result.content[0].text ?? '';
+        expect(text).not.toContain('undefined');
+        expect(text).not.toContain('Review Quota');
+    });
+
+    it('renders only the numeric fields actually present', async () => {
+        delete process.env.OPTIBOT_API_KEY;
+        mockReadConfig.mockResolvedValue({ apiKey: 'k' });
+        mockListOrganizations.mockResolvedValue({
+            organizations: [{ id: 1, name: 'Acme' }],
+            currentOrganizationId: 1,
+        });
+        // Only `remaining` is a number — `current`/`limit` missing.
+        mockGetReviewStatus.mockResolvedValue({ remaining: 42 });
+        mockGetOrgIdFromToken.mockReturnValue(1);
+
+        const result = await registered.get('get_status')!({});
+        const text = result.content[0].text ?? '';
+        expect(text).toContain('## Review Quota');
+        expect(text).toContain('Remaining: 42');
+        expect(text).not.toContain('Used:');
+        expect(text).not.toContain('undefined');
+    });
 });
