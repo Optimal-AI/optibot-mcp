@@ -22,6 +22,7 @@ import {
     getRemoteBranches,
     detectBaseBranch,
     checkMergeConflicts,
+    assertSafeRefName,
 } from './git.js';
 
 const execMock = vi.mocked(exec);
@@ -167,7 +168,7 @@ function mockExecPerCommandWithErrors(
 
 describe('getRepoRoot', () => {
     it('returns trimmed stdout from git rev-parse', async () => {
-        mockExec('/Users/me/project\n');
+        mockExecFile('/Users/me/project\n');
         const root = await getRepoRoot();
         expect(root).toBe('/Users/me/project');
     });
@@ -180,7 +181,7 @@ describe('getRepoRoot', () => {
 
 describe('getRepoName', () => {
     it('returns basename of the repo root', async () => {
-        mockExec('/Users/me/my-project\n');
+        mockExecFile('/Users/me/my-project\n');
         const name = await getRepoName();
         expect(name).toBe('my-project');
     });
@@ -188,16 +189,17 @@ describe('getRepoName', () => {
 
 describe('getDiffHead', () => {
     it('returns stdout from git diff HEAD', async () => {
-        mockExec('diff --git a/file.ts b/file.ts\n');
+        mockExecFile('diff --git a/file.ts b/file.ts\n');
         const diff = await getDiffHead('/repo');
         expect(diff).toBe('diff --git a/file.ts b/file.ts\n');
     });
 
-    it('calls exec with correct cwd and maxBuffer', async () => {
-        mockExec('');
+    it('calls execFile with correct cwd and maxBuffer', async () => {
+        mockExecFile('');
         await getDiffHead('/repo');
-        expect(execMock).toHaveBeenCalledWith(
-            'git diff HEAD',
+        expect(execFileMock).toHaveBeenCalledWith(
+            'git',
+            ['diff', 'HEAD'],
             expect.objectContaining({
                 cwd: '/repo',
                 maxBuffer: 50 * 1024 * 1024,
@@ -208,16 +210,62 @@ describe('getDiffHead', () => {
 });
 
 describe('getDiffBranch', () => {
-    it('calls git diff with the target branch via execFile', async () => {
+    it('calls git diff with --end-of-options before the target branch', async () => {
         mockExecFile('branch diff output');
         const diff = await getDiffBranch('main', '/repo');
         expect(diff).toBe('branch diff output');
         expect(execFileMock).toHaveBeenCalledWith(
             'git',
-            ['diff', 'main'],
+            ['diff', '--end-of-options', 'main'],
             expect.objectContaining({ cwd: '/repo' }),
             expect.any(Function)
         );
+    });
+
+    it('rejects branch names that look like git options', async () => {
+        await expect(getDiffBranch('--upload-pack=evil', '/repo')).rejects.toThrow('Invalid branch name');
+        await expect(getDiffBranch('-e foo', '/repo')).rejects.toThrow('Invalid branch name');
+    });
+
+    it('rejects branch names containing shell metacharacters', async () => {
+        await expect(getDiffBranch('main;rm -rf /', '/repo')).rejects.toThrow('Invalid branch name');
+        await expect(getDiffBranch('main$(whoami)', '/repo')).rejects.toThrow('Invalid branch name');
+    });
+});
+
+describe('assertSafeRefName', () => {
+    it('accepts ordinary branch names', () => {
+        expect(() => assertSafeRefName('main')).not.toThrow();
+        expect(() => assertSafeRefName('origin/main')).not.toThrow();
+        expect(() => assertSafeRefName('feature/foo-bar')).not.toThrow();
+        expect(() => assertSafeRefName('release-1.3.0')).not.toThrow();
+        expect(() => assertSafeRefName('user@/my+ref')).not.toThrow();
+    });
+
+    it('rejects empty or non-string input', () => {
+        expect(() => assertSafeRefName('')).toThrow('non-empty string');
+        expect(() => assertSafeRefName(undefined as unknown as string)).toThrow('non-empty string');
+    });
+
+    it('rejects leading dash (option-injection)', () => {
+        expect(() => assertSafeRefName('-rm')).toThrow('must not start with "-"');
+        expect(() => assertSafeRefName('--upload-pack=evil')).toThrow('must not start with "-"');
+    });
+
+    it('rejects path-traversal sequences', () => {
+        expect(() => assertSafeRefName('a/../b')).toThrow('forbidden sequence');
+        expect(() => assertSafeRefName('a//b')).toThrow('forbidden sequence');
+        expect(() => assertSafeRefName('/main')).toThrow('forbidden sequence');
+        expect(() => assertSafeRefName('main/')).toThrow('forbidden sequence');
+    });
+
+    it('rejects shell-special and control characters', () => {
+        expect(() => assertSafeRefName('main;rm')).toThrow('forbidden characters');
+        expect(() => assertSafeRefName('main$(x)')).toThrow('forbidden characters');
+        expect(() => assertSafeRefName('main`x`')).toThrow('forbidden characters');
+        expect(() => assertSafeRefName('main x')).toThrow('forbidden characters');
+        expect(() => assertSafeRefName('main\nfoo')).toThrow('forbidden characters');
+        expect(() => assertSafeRefName('main\x00')).toThrow('forbidden characters');
     });
 });
 
@@ -248,8 +296,8 @@ describe('readDiffFile', () => {
 describe('getChangedFiles', () => {
     it('parses git diff --name-status in local mode', async () => {
         mockExecPerCommand({
-            'git diff --name-status HEAD': 'M\tsrc/file1.ts\nA\tsrc/file2.ts\nD\tsrc/file3.ts\n',
-            'git ls-files --others': '',
+            'diff --name-status HEAD': 'M\tsrc/file1.ts\nA\tsrc/file2.ts\nD\tsrc/file3.ts\n',
+            'ls-files --others': '',
         });
 
         const files = await getChangedFiles('/repo');
@@ -262,8 +310,8 @@ describe('getChangedFiles', () => {
     it('merges committed and uncommitted changes in branch mode', async () => {
         mockExecPerCommand({
             'main...HEAD': 'M\ta.ts\n',
-            'git diff --name-status HEAD': 'M\tb.ts\n',
-            'git ls-files --others': '',
+            'diff --name-status HEAD': 'M\tb.ts\n',
+            'ls-files --others': '',
         });
 
         const files = await getChangedFiles('/repo', 'main');
@@ -274,8 +322,8 @@ describe('getChangedFiles', () => {
 
     it('includes untracked files with status "?"', async () => {
         mockExecPerCommand({
-            'git diff --name-status HEAD': '',
-            'git ls-files --others': 'new-file.ts\n',
+            'diff --name-status HEAD': '',
+            'ls-files --others': 'new-file.ts\n',
         });
 
         const files = await getChangedFiles('/repo');
@@ -285,12 +333,16 @@ describe('getChangedFiles', () => {
 
     it('handles empty output', async () => {
         mockExecPerCommand({
-            'git diff --name-status HEAD': '',
-            'git ls-files --others': '',
+            'diff --name-status HEAD': '',
+            'ls-files --others': '',
         });
 
         const files = await getChangedFiles('/repo');
         expect(files).toEqual([]);
+    });
+
+    it('rejects unsafe target branch names before invoking git', async () => {
+        await expect(getChangedFiles('/repo', '--exec=evil')).rejects.toThrow('Invalid branch name');
     });
 });
 
@@ -351,13 +403,13 @@ describe('getFileContents', () => {
 
 describe('getRemoteBranches', () => {
     it('parses git branch -r output', async () => {
-        mockExec('  origin/main\n  origin/develop\n  origin/feature-x\n');
+        mockExecFile('  origin/main\n  origin/develop\n  origin/feature-x\n');
         const branches = await getRemoteBranches('/repo');
         expect(branches).toEqual(['origin/develop', 'origin/feature-x', 'origin/main']);
     });
 
     it('filters out HEAD references', async () => {
-        mockExec('  origin/HEAD -> origin/main\n  origin/main\n  origin/develop\n');
+        mockExecFile('  origin/HEAD -> origin/main\n  origin/main\n  origin/develop\n');
         const branches = await getRemoteBranches('/repo');
         expect(branches).not.toContain('origin/HEAD -> origin/main');
         expect(branches).toContain('origin/main');
@@ -370,7 +422,7 @@ describe('getRemoteBranches', () => {
     });
 
     it('returns empty array for empty output', async () => {
-        mockExec('');
+        mockExecFile('');
         const branches = await getRemoteBranches('/repo');
         expect(branches).toEqual([]);
     });
@@ -378,25 +430,25 @@ describe('getRemoteBranches', () => {
 
 describe('detectBaseBranch', () => {
     it('returns origin/main when available', async () => {
-        mockExec('  origin/main\n  origin/develop\n');
+        mockExecFile('  origin/main\n  origin/develop\n');
         const branch = await detectBaseBranch('/repo');
         expect(branch).toBe('origin/main');
     });
 
     it('returns origin/master when main is not available', async () => {
-        mockExec('  origin/master\n  origin/develop\n');
+        mockExecFile('  origin/master\n  origin/develop\n');
         const branch = await detectBaseBranch('/repo');
         expect(branch).toBe('origin/master');
     });
 
     it('returns origin/develop when neither main nor master exist', async () => {
-        mockExec('  origin/develop\n  origin/feature\n');
+        mockExecFile('  origin/develop\n  origin/feature\n');
         const branch = await detectBaseBranch('/repo');
         expect(branch).toBe('origin/develop');
     });
 
     it('returns first branch when no standard branches found', async () => {
-        mockExec('  origin/feature-a\n  origin/feature-b\n');
+        mockExecFile('  origin/feature-a\n  origin/feature-b\n');
         const branch = await detectBaseBranch('/repo');
         expect(branch).toBe('origin/feature-a');
     });
@@ -460,5 +512,9 @@ describe('checkMergeConflicts', () => {
         mockExecError('everything fails');
         const result = await checkMergeConflicts('origin/main', '/repo');
         expect(result).toBe(false);
+    });
+
+    it('rejects unsafe target branch names before invoking git', async () => {
+        await expect(checkMergeConflicts('--exec=evil', '/repo')).rejects.toThrow('Invalid branch name');
     });
 });

@@ -4,32 +4,59 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { readConfig, writeConfig, deleteConfig } from '../lib/config.js';
 import { getApiBaseUrl } from '../lib/apiConfig.js';
 import { ApiClient } from '../lib/api.js';
-import { formatError } from '../lib/output.js';
-import { formatResetTime } from '../lib/output.js';
+import { sanitizeServerText } from '../lib/output.js';
+import { isCiEnvironment } from '../lib/ci.js';
+import { getOrganizationIdFromToken } from '../lib/jwt.js';
+import { AuthResponse, TokenResponse } from '../types.js';
 
 const PORT = 8080;
 
-interface TokenResponse {
-    token: string;
-    expiresIn: number;
-    user: {
-        firebaseUserId: string;
-        email: string;
-        name?: string;
-        avatarUrl?: string;
-    };
+// Exported for tests. Constant-time equality on equal-length inputs;
+// short-circuits to false on length mismatch (which is also constant-time
+// because length is checked before any byte comparison).
+export function statesMatch(a: string, b: string): boolean {
+    if (a.length !== b.length) return false;
+    return crypto.timingSafeEqual(Buffer.from(a), Buffer.from(b));
+}
+
+const ALLOWED_HOSTS = new Set([
+    `localhost:${PORT}`,
+    `127.0.0.1:${PORT}`,
+]);
+
+// Exported for tests.
+export function isAllowedHost(host: string | undefined): boolean {
+    if (!host) return false;
+    return ALLOWED_HOSTS.has(host);
 }
 
 async function startLocalServer(state: string): Promise<{ code: string; server: http.Server }> {
     return new Promise((resolve, reject) => {
         const server = http.createServer((req, res) => {
+            // Reject anything but GET — narrows the surface against any local
+            // process or browser-side form abuse poking at the callback port.
+            if (req.method !== 'GET') {
+                res.writeHead(405, { 'Content-Type': 'text/plain', 'Allow': 'GET' });
+                res.end('Method Not Allowed');
+                return;
+            }
+
+            // Host-header check defends against DNS-rebinding scenarios where
+            // a remote page tricks the browser into talking to 127.0.0.1.
+            // State is the real secret, but pinning Host costs nothing.
+            if (!isAllowedHost(req.headers.host)) {
+                res.writeHead(400, { 'Content-Type': 'text/plain' });
+                res.end('Bad Host');
+                return;
+            }
+
             const url = new URL(req.url || '', `http://localhost:${PORT}`);
 
             if (url.pathname === '/callback') {
                 const code = url.searchParams.get('code');
                 const returnedState = url.searchParams.get('state');
 
-                if (!code || returnedState !== state) {
+                if (!code || !returnedState || !statesMatch(returnedState, state)) {
                     res.writeHead(400, { 'Content-Type': 'text/html' });
                     res.end('<h1>Authentication Failed</h1><p>Invalid or missing parameters.</p>');
                     reject(new Error('Invalid callback parameters'));
@@ -100,7 +127,7 @@ async function startLocalServer(state: string): Promise<{ code: string; server: 
     });
 }
 
-async function exchangeCodeForToken(code: string, state: string): Promise<TokenResponse> {
+async function exchangeCodeForToken(code: string, state: string): Promise<AuthResponse> {
     const API_BASE_URL = getApiBaseUrl();
     const response = await fetch(`${API_BASE_URL}/client/token`, {
         method: 'POST',
@@ -109,20 +136,20 @@ async function exchangeCodeForToken(code: string, state: string): Promise<TokenR
     });
 
     if (!response.ok) {
-        const error = await response.json().catch(() => ({ error: 'Unknown error' })) as { error?: string };
-        throw new Error(error.error || `HTTP ${response.status}`);
+        const error = await response.json().catch(() => ({ error: 'Unknown error' })) as { error?: string; message?: string };
+        throw new Error(error.error || error.message || `HTTP ${response.status}`);
     }
 
-    const data = await response.json() as any;
+    return await response.json() as AuthResponse;
+}
 
-    if (data.status === 'onboarding_required') {
-        const err: any = new Error('Account setup required');
-        err.code = 'ONBOARDING_REQUIRED';
-        err.onboardingUrl = data.onboardingUrl;
-        throw err;
-    }
-
-    return data as TokenResponse;
+function formatExpiry(expiresIn: number): string {
+    const days = Math.floor(expiresIn / 86400);
+    if (days > 0) return `${days}d`;
+    const hours = Math.floor(expiresIn / 3600);
+    if (hours > 0) return `${hours}h`;
+    const minutes = Math.floor(expiresIn / 60);
+    return `${minutes}m`;
 }
 
 export function registerAuthTools(server: McpServer): void {
@@ -130,8 +157,26 @@ export function registerAuthTools(server: McpServer): void {
     // Tool: login
     server.tool(
         'login',
-        'Authenticate with Optibot via browser OAuth. Opens a browser window for login and saves credentials locally. Token expires after 90 days.',
+        'Authenticate with Optibot via browser OAuth. Opens a browser window for login and saves credentials locally. Token expires after 90 days. If your account needs onboarding, returns a URL to complete setup before you can authenticate. Refuses to run inside CI environments.',
         async () => {
+            // Mirror the CLI: refuse the browser flow inside CI runners. The
+            // browser can't open and the prompt would hang (or appear to
+            // succeed with a stale token). Direct users to the API-key path.
+            if (isCiEnvironment()) {
+                return {
+                    content: [{
+                        type: 'text' as const,
+                        text: [
+                            'CI environment detected.',
+                            '',
+                            '`login` opens a browser, which cannot work inside a CI runner.',
+                            'In CI, set `OPTIBOT_API_KEY` from your provider\'s secrets — run `setup_ci` on a dev machine first to mint that key.',
+                        ].join('\n'),
+                    }],
+                    isError: true,
+                };
+            }
+
             const state = crypto.randomBytes(32).toString('hex');
             const API_BASE_URL = getApiBaseUrl();
 
@@ -146,26 +191,67 @@ export function registerAuthTools(server: McpServer): void {
                 const { default: open } = await import('open');
                 await open(authUrl);
 
-                const tokenData = await exchangeCodeForToken(code, state);
-                await writeConfig({ apiKey: tokenData.token });
+                const authResponse = await exchangeCodeForToken(code, state);
 
-                let msg = 'Successfully authenticated!';
-                if (tokenData.user.email) {
-                    msg += `\nLogged in as: ${tokenData.user.email}`;
-                }
-                msg += `\nToken expires in ${Math.floor(tokenData.expiresIn / 86400)} days`;
-
-                return { content: [{ type: 'text' as const, text: msg }] };
-            } catch (err: any) {
-                if (err.code === 'ONBOARDING_REQUIRED') {
+                // Onboarding branch: backend says the user needs to finish setup
+                // before we can issue a token. Do NOT save anything locally — the
+                // user must revisit the URL and call `login` again after setup.
+                if ('status' in authResponse && authResponse.status === 'onboarding_required') {
+                    const url = sanitizeServerText(authResponse.onboardingUrl);
                     return {
                         content: [{
                             type: 'text' as const,
-                            text: `Account setup required. Please open this URL to complete setup:\n\n${err.onboardingUrl}\n\nAfter completing setup, run the login tool again.`
-                        }]
+                            text: [
+                                'Onboarding required before login can complete.',
+                                '',
+                                `Open: ${url}`,
+                                '',
+                                'Finish setup, then call the `login` tool again.',
+                            ].join('\n'),
+                        }],
                     };
                 }
-                return { content: [{ type: 'text' as const, text: `Authentication failed: ${err.message}` }], isError: true };
+
+                const tokenData = authResponse as TokenResponse;
+                await writeConfig({ apiKey: tokenData.token });
+
+                const lines: string[] = ['Successfully authenticated!'];
+                if (tokenData.user?.email) {
+                    lines.push(`Logged in as: ${sanitizeServerText(tokenData.user.email)}`);
+                }
+                if (typeof tokenData.expiresIn === 'number') {
+                    lines.push(`Token expires in ${formatExpiry(tokenData.expiresIn)}`);
+                }
+
+                // Surface org context so the LLM/host knows whether to offer
+                // an org switch next. Prefer the claim from the JWT itself
+                // (the authoritative source) over the top-level field.
+                const orgId = getOrganizationIdFromToken(tokenData.token) ?? tokenData.organizationId;
+                if (typeof orgId === 'number') {
+                    try {
+                        const client = new ApiClient(tokenData.token);
+                        const orgs = await client.listOrganizations();
+                        const active = orgs.organizations.find(o => o.id === orgId);
+                        if (active) {
+                            const label = sanitizeServerText(active.displayName || active.name);
+                            lines.push(`Active organization: ${label}`);
+                        }
+                        if (orgs.organizations.length > 1) {
+                            lines.push('');
+                            lines.push(`You belong to ${orgs.organizations.length} organizations. Use \`list_organizations\` and \`switch_organization\` to change the active one.`);
+                        }
+                    } catch {
+                        // Non-fatal: token is saved even if org lookup fails.
+                    }
+                }
+
+                lines.push('');
+                lines.push('If you\'re setting up Optibot in CI/CD next, ask me to run `setup_ci`.');
+
+                return { content: [{ type: 'text' as const, text: lines.join('\n') }] };
+            } catch (err) {
+                const message = err instanceof Error ? err.message : 'Authentication failed';
+                return { content: [{ type: 'text' as const, text: `Authentication failed: ${message}` }], isError: true };
             } finally {
                 if (localServer) {
                     localServer.closeAllConnections();
@@ -186,8 +272,9 @@ export function registerAuthTools(server: McpServer): void {
                     return { content: [{ type: 'text' as const, text: 'Logged out successfully. Saved credentials have been removed.' }] };
                 }
                 return { content: [{ type: 'text' as const, text: 'Already logged out. No credentials found.' }] };
-            } catch (err: any) {
-                return { content: [{ type: 'text' as const, text: `Logout failed: ${err.message}` }], isError: true };
+            } catch (err) {
+                const message = err instanceof Error ? err.message : 'Unknown error';
+                return { content: [{ type: 'text' as const, text: `Logout failed: ${message}` }], isError: true };
             }
         }
     );
@@ -195,29 +282,29 @@ export function registerAuthTools(server: McpServer): void {
     // Tool: check_auth
     server.tool(
         'check_auth',
-        'Check current Optibot authentication status. Shows whether credentials are configured via environment variable or config file.',
+        'Check current Optibot authentication status. Shows whether credentials are configured via environment variable or config file, and the active organization (if any).',
         async () => {
             try {
                 const envKey = process.env.OPTIBOT_API_KEY;
-                if (envKey) {
-                    const prefix = envKey.substring(0, Math.min(8, envKey.length));
-                    return {
-                        content: [{
-                            type: 'text' as const,
-                            text: `Authenticated via OPTIBOT_API_KEY environment variable.\nKey prefix: ${prefix}...`
-                        }]
-                    };
+                const source = envKey ? 'OPTIBOT_API_KEY environment variable' : 'config file (~/.optibot/config.json)';
+                const token = envKey || (await readConfig()).apiKey;
+
+                const prefix = token.substring(0, Math.min(8, token.length));
+                const lines: string[] = [
+                    `Authenticated via ${source}.`,
+                    `Key prefix: ${prefix}...`,
+                ];
+
+                const orgId = getOrganizationIdFromToken(token);
+                if (typeof orgId === 'number') {
+                    lines.push(`Active organization id (from token): ${orgId}`);
                 }
 
-                const config = await readConfig();
-                const prefix = config.apiKey.substring(0, Math.min(8, config.apiKey.length));
-                return {
-                    content: [{
-                        type: 'text' as const,
-                        text: `Authenticated via config file (~/.optibot/config.json).\nKey prefix: ${prefix}...`
-                    }]
-                };
-            } catch (err: any) {
+                lines.push('');
+                lines.push('For CI/CD setup, ask me to run `setup_ci` to mint a long-lived API key bound to the active organization.');
+
+                return { content: [{ type: 'text' as const, text: lines.join('\n') }] };
+            } catch {
                 return {
                     content: [{
                         type: 'text' as const,
@@ -228,42 +315,8 @@ export function registerAuthTools(server: McpServer): void {
         }
     );
 
-    // Tool: get_profile
-    server.tool(
-        'get_profile',
-        'Get your Optibot user profile and review quota status. Shows email, profile info, and how many reviews you have remaining today.',
-        async () => {
-            try {
-                const config = await readConfig();
-                const client = new ApiClient(config.apiKey);
-
-                const [profile, reviewStatus] = await Promise.all([
-                    client.getUserProfile(),
-                    client.getReviewStatus(),
-                ]);
-
-                const lines: string[] = [
-                    '## User Profile',
-                    '',
-                    `Email: ${profile.email}`,
-                ];
-
-                if (profile.name) {
-                    lines.push(`Name: ${profile.name}`);
-                }
-
-                lines.push('', '## Review Quota', '');
-                lines.push(`Used: ${reviewStatus.current} / ${reviewStatus.limit}`);
-                lines.push(`Remaining: ${reviewStatus.remaining}`);
-
-                if (reviewStatus.resetAt) {
-                    lines.push(`Resets: ${formatResetTime(reviewStatus.resetAt)}`);
-                }
-
-                return { content: [{ type: 'text' as const, text: lines.join('\n') }] };
-            } catch (err) {
-                return { content: [{ type: 'text' as const, text: formatError(err) }], isError: true };
-            }
-        }
-    );
+    // get_profile was removed in 1.3.0 — the data it returned (email, review quota)
+    // is covered by `check_auth` (auth source + active org) and `get_status` (review
+    // quota and profile). The backend never implemented /api/user/profile, so the
+    // tool was always failing in practice.
 }

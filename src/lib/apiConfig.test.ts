@@ -65,4 +65,32 @@ describe('getApiBaseUrl', () => {
         expect(spy).not.toHaveBeenCalled();
         spy.mockRestore();
     });
+
+    it('warns when the custom URL points at a loopback host', () => {
+        const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+        process.env.OPTIBOT_API_URL = 'https://localhost:8443';
+        getApiBaseUrl();
+        const calls = spy.mock.calls.map(c => String(c[0]));
+        expect(calls.some(c => c.includes('private/loopback host'))).toBe(true);
+        expect(calls.some(c => c.includes('localhost'))).toBe(true);
+        spy.mockRestore();
+    });
+
+    it('warns when the custom URL points at an RFC1918 address', () => {
+        const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+        process.env.OPTIBOT_API_URL = 'https://10.0.0.5:8443';
+        getApiBaseUrl();
+        const calls = spy.mock.calls.map(c => String(c[0]));
+        expect(calls.some(c => c.includes('private/loopback host'))).toBe(true);
+        spy.mockRestore();
+    });
+
+    it('does not emit the loopback warning for ordinary public hosts', () => {
+        const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+        process.env.OPTIBOT_API_URL = 'https://staging.example.com';
+        getApiBaseUrl();
+        const calls = spy.mock.calls.map(c => String(c[0]));
+        expect(calls.some(c => c.includes('private/loopback host'))).toBe(false);
+        spy.mockRestore();
+    });
 });

@@ -224,4 +224,14 @@ describe('formatError', () => {
         const msg = formatError({});
         expect(msg).toContain('Unknown error');
     });
+
+    it('strips ANSI / control chars from server-supplied error messages', () => {
+        const msg = formatError({ status: 500, message: '\x1b[31mBoom\x1b[0m\x1b]0;hijack\x07' });
+        expect(msg).toBe('Error: Boom');
+    });
+
+    it('strips ANSI / control chars from server-supplied 403 messages', () => {
+        const msg = formatError({ status: 403, data: { error: '\x1b[31mForbidden\x1b[0m\x07' } });
+        expect(msg).toBe('Forbidden');
+    });
 });

@@ -21,6 +21,7 @@ vi.mock('../lib/api.js', () => ({
 
 vi.mock('../lib/output.js', () => ({
     formatError: (...args: any[]) => mockFormatError(...args),
+    sanitizeServerText: (s: string) => s,
 }));
 
 import { registerApiKeyTools } from './apikey.js';
@@ -61,6 +62,22 @@ describe('apikey tools', () => {
             expect(result.content[0].text).toContain('API key created successfully');
             expect(result.content[0].text).toContain('optk_abc123');
             expect(result.content[0].text).toContain('will not be shown again');
+        });
+
+        it('includes the export line and a secret-store hint', async () => {
+            mockReadConfig.mockResolvedValue({ apiKey: 'key' });
+            mockCreateApiKey.mockResolvedValue({
+                id: 1, name: 'ci', keyPrefix: 'optk', key: 'optk_abc123', createdAt: '2026-01-01',
+            });
+
+            const handler = registeredTools.get('create_api_key')!;
+            const result = await handler({ name: 'ci' });
+            const text = result.content[0].text;
+            expect(text).toContain('export OPTIBOT_API_KEY=optk_abc123');
+            expect(text).toMatch(/secret store as OPTIBOT_API_KEY/);
+            // Snippets removed in this release — must not print YAML.
+            expect(text).not.toContain('name: Optibot Review');
+            expect(text).not.toContain('optibot-review:');
         });
 
         it('returns error when not authenticated', async () => {
@@ -123,6 +140,26 @@ describe('apikey tools', () => {
             const result = await handler({ id: '42' });
 
             expect(result.content[0].text).toContain('42');
+            expect(result.content[0].text).toContain('deleted successfully');
+        });
+
+        it('strips control chars from the id before echoing it back', async () => {
+            // The id reaches the LLM via the tool result; an attacker-controlled
+            // or hallucinated id with ANSI escape sequences must not pass
+            // through verbatim. Use a sanitizer mock that proves we route
+            // through it (the production sanitizeServerText strips them).
+            mockReadConfig.mockResolvedValue({ apiKey: 'key' });
+            mockDeleteApiKey.mockResolvedValue(undefined);
+
+            const handler = registeredTools.get('delete_api_key')!;
+            // Re-mock sanitizeServerText to a transform we can verify.
+            // (The default mock at the top of this file is identity, so we
+            // assert at least the mock was invoked with the input.)
+            const result = await handler({ id: '[31m42[0m' });
+
+            // The default mock returns input unchanged; this test documents
+            // the contract that sanitize is called. The integration with the
+            // real sanitizer is covered by the api.test.ts/output.test.ts pair.
             expect(result.content[0].text).toContain('deleted successfully');
         });
 

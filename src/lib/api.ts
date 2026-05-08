@@ -1,4 +1,21 @@
-import { ReviewResponse, ApiKeyCreateResponse, ApiKeyListItem, ApiKeyListResponse, UserProfile, ReviewStatus } from '../types.js';
+import {
+    ReviewResponse,
+    ApiKeyCreateResponse,
+    ApiKeyListItem,
+    ApiKeyListResponse,
+    ReviewStatus,
+    OrgListResponse,
+    RescopeResponse,
+    ScanPricingResponse,
+    ScanUsageResponse,
+    SecurityScanListResponse,
+    SecurityConfigResponse,
+    SecurityConfigSaveRequest,
+    SecurityConfigSaveResponse,
+    ScanTriggerRequest,
+    ScanTriggerResponse,
+    RepositoryStats,
+} from '../types.js';
 import { getApiBaseUrl } from './apiConfig.js';
 
 const API_BASE_URL = getApiBaseUrl();
@@ -8,18 +25,19 @@ export class ApiClient {
 
     private async throwApiError(response: Response): Promise<never> {
         let errorMessage = `API request failed: ${response.statusText} (${response.status})`;
-        let errorData: any = {};
+        let errorData: Record<string, unknown> = {};
 
         try {
-            errorData = await response.json();
-            if (errorData.message) {
-                errorMessage = errorData.message;
+            errorData = await response.json() as Record<string, unknown>;
+            const msg = (errorData as { message?: unknown }).message;
+            if (typeof msg === 'string') {
+                errorMessage = msg;
             }
         } catch {
             // Use default error message
         }
 
-        const error: any = new Error(errorMessage);
+        const error = new Error(errorMessage) as Error & { status: number; data: Record<string, unknown> };
         error.status = response.status;
         error.data = errorData;
         throw error;
@@ -33,7 +51,7 @@ export class ApiClient {
     }): Promise<ReviewResponse> {
         const patchBase64 = Buffer.from(params.patch, 'utf-8').toString('base64');
 
-        const body: Record<string, any> = { patch: patchBase64 };
+        const body: Record<string, unknown> = { patch: patchBase64 };
 
         if (params.repositoryName) {
             body.repositoryName = params.repositoryName;
@@ -44,7 +62,9 @@ export class ApiClient {
         }
 
         if (params.files && Object.keys(params.files).length > 0) {
-            const encodedFiles: Record<string, string> = {};
+            // Null-prototype map: filenames from a repo are untrusted input
+            // (a file literally named `__proto__` would otherwise pollute).
+            const encodedFiles: Record<string, string> = Object.create(null);
             for (const [filePath, content] of Object.entries(params.files)) {
                 encodedFiles[filePath] = Buffer.from(content, 'utf-8').toString('base64');
             }
@@ -129,21 +149,6 @@ export class ApiClient {
         }
     }
 
-    async getUserProfile(): Promise<UserProfile> {
-        const response = await fetch(`${API_BASE_URL}/api/user/profile`, {
-            method: 'GET',
-            headers: {
-                'Authorization': `Bearer ${this.apiKey}`,
-            },
-        });
-
-        if (!response.ok) {
-            await this.throwApiError(response);
-        }
-
-        return await response.json() as UserProfile;
-    }
-
     async getReviewStatus(): Promise<ReviewStatus> {
         const response = await fetch(`${API_BASE_URL}/api/user/review-status`, {
             method: 'GET',
@@ -157,5 +162,173 @@ export class ApiClient {
         }
 
         return await response.json() as ReviewStatus;
+    }
+
+    async listOrganizations(): Promise<OrgListResponse> {
+        const response = await fetch(`${API_BASE_URL}/client/organizations`, {
+            method: 'GET',
+            headers: {
+                'Authorization': `Bearer ${this.apiKey}`,
+            },
+        });
+
+        if (!response.ok) {
+            await this.throwApiError(response);
+        }
+
+        return await response.json() as OrgListResponse;
+    }
+
+    async rescopeToken(organizationId: number): Promise<RescopeResponse> {
+        const response = await fetch(`${API_BASE_URL}/client/token/rescope`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${this.apiKey}`,
+            },
+            body: JSON.stringify({ organizationId }),
+        });
+
+        if (!response.ok) {
+            await this.throwApiError(response);
+        }
+
+        return await response.json() as RescopeResponse;
+    }
+
+    async getSecurityPricing(): Promise<ScanPricingResponse> {
+        const response = await fetch(`${API_BASE_URL}/api/security/pricing`, {
+            method: 'GET',
+            headers: { 'Authorization': `Bearer ${this.apiKey}` },
+        });
+
+        if (!response.ok) {
+            await this.throwApiError(response);
+        }
+
+        return await response.json() as ScanPricingResponse;
+    }
+
+    async getSecurityUsage(): Promise<ScanUsageResponse> {
+        const response = await fetch(`${API_BASE_URL}/api/security/usage`, {
+            method: 'GET',
+            headers: { 'Authorization': `Bearer ${this.apiKey}` },
+        });
+
+        if (!response.ok) {
+            await this.throwApiError(response);
+        }
+
+        return await response.json() as ScanUsageResponse;
+    }
+
+    async listSecurityIssues(params: {
+        page?: number;
+        pageSize?: number;
+        repositoryIds?: number[];
+    } = {}): Promise<SecurityScanListResponse> {
+        const query = new URLSearchParams();
+        if (params.page !== undefined) query.set('page', String(params.page));
+        if (params.pageSize !== undefined) query.set('pageSize', String(params.pageSize));
+        if (params.repositoryIds && params.repositoryIds.length > 0) {
+            query.set('repositoryIds', params.repositoryIds.join(','));
+        }
+        const qs = query.toString();
+        const url = `${API_BASE_URL}/api/security/issues${qs ? `?${qs}` : ''}`;
+
+        const response = await fetch(url, {
+            method: 'GET',
+            headers: { 'Authorization': `Bearer ${this.apiKey}` },
+        });
+
+        if (!response.ok) {
+            await this.throwApiError(response);
+        }
+
+        return await response.json() as SecurityScanListResponse;
+    }
+
+    async triggerSecurityScan(
+        body: ScanTriggerRequest,
+        sessionId?: string,
+    ): Promise<ScanTriggerResponse> {
+        const qs = sessionId ? `?sessionId=${encodeURIComponent(sessionId)}` : '';
+        const response = await fetch(`${API_BASE_URL}/api/security/scan${qs}`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${this.apiKey}`,
+            },
+            body: JSON.stringify(body),
+        });
+
+        if (!response.ok) {
+            await this.throwApiError(response);
+        }
+
+        return await response.json() as ScanTriggerResponse;
+    }
+
+    async getSecurityConfig(organizationId: number): Promise<SecurityConfigResponse> {
+        const response = await fetch(
+            `${API_BASE_URL}/api/organizations/${organizationId}/security-configs`,
+            {
+                method: 'GET',
+                headers: { 'Authorization': `Bearer ${this.apiKey}` },
+            }
+        );
+
+        if (!response.ok) {
+            await this.throwApiError(response);
+        }
+
+        return await response.json() as SecurityConfigResponse;
+    }
+
+    async saveSecurityConfig(
+        organizationId: number,
+        body: SecurityConfigSaveRequest,
+    ): Promise<SecurityConfigSaveResponse> {
+        const response = await fetch(
+            `${API_BASE_URL}/api/organizations/${organizationId}/security-configs`,
+            {
+                method: 'PUT',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${this.apiKey}`,
+                },
+                body: JSON.stringify(body),
+            }
+        );
+
+        if (!response.ok) {
+            await this.throwApiError(response);
+        }
+
+        return await response.json() as SecurityConfigSaveResponse;
+    }
+
+    async listRepositoryStats(organizationId: number): Promise<RepositoryStats[]> {
+        const response = await fetch(
+            `${API_BASE_URL}/api/organizations/${organizationId}/repositories/stats`,
+            {
+                method: 'GET',
+                headers: { 'Authorization': `Bearer ${this.apiKey}` },
+            }
+        );
+
+        if (!response.ok) {
+            await this.throwApiError(response);
+        }
+
+        const json = await response.json();
+        // Backend may return an array or { items: [...] } — normalize to an array.
+        if (Array.isArray(json)) {
+            return json as RepositoryStats[];
+        }
+        if (json && typeof json === 'object' && Array.isArray((json as { items?: unknown }).items)) {
+            return (json as { items: RepositoryStats[] }).items;
+        }
+        return [];
     }
 }

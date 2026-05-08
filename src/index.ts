@@ -5,15 +5,34 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { registerReviewTools } from './tools/review.js';
 import { registerAuthTools } from './tools/auth.js';
 import { registerApiKeyTools } from './tools/apikey.js';
+import { registerOrgTools } from './tools/org.js';
+import { registerStatusTool } from './tools/status.js';
+import { registerScanTools } from './tools/scan.js';
+import { registerSetupCiTool } from './tools/setupCi.js';
 
-const server = new McpServer({
-    name: 'optibot',
-    version: '1.0.0',
-});
+// `logging: {}` advertises the logging capability so the SDK accepts our
+// `notifications/message` events emitted by ReviewProgressService /
+// SecurityScanProgressService. Without it, the very first progress event
+// throws synchronously from inside the SDK and kills the process.
+const server = new McpServer(
+    {
+        name: 'optibot',
+        version: '1.3.1',
+    },
+    {
+        capabilities: {
+            logging: {},
+        },
+    },
+);
 
 registerReviewTools(server);
 registerAuthTools(server);
 registerApiKeyTools(server);
+registerOrgTools(server);
+registerStatusTool(server);
+registerScanTools(server);
+registerSetupCiTool(server);
 
 async function main() {
     const transport = new StdioServerTransport();
