@@ -192,26 +192,11 @@ describe('auth tools', () => {
             expect(result.content[0].text).toMatch(/CI environment detected/i);
         });
 
-        it('returns error when local server fails to start', async () => {
-            // login handler starts an HTTP server on port 8080
-            // If port is already in use, it should return an error
-            const handler = registeredTools.get('login')!;
-
-            // Mock the http.createServer to simulate port conflict
-            const http = await import('http');
-            const blockingServer = http.createServer();
-            await new Promise<void>((resolve) => {
-                blockingServer.listen(8080, '127.0.0.1', () => resolve());
-            });
-
-            try {
-                const result = await handler({});
-                expect(result.isError).toBe(true);
-                expect(result.content[0].text).toContain('Authentication failed');
-            } finally {
-                blockingServer.close();
-            }
-        });
+        // Note: there used to be a "port 8080 already in use" test here, but
+        // the login flow now listens on an ephemeral port (server.listen(0)),
+        // so port collision is no longer a reachable failure mode. The
+        // generic server.on('error', reject) handler still exists in the
+        // production code; it just isn't exercised by a port-collision test.
 
     });
 
@@ -236,24 +221,33 @@ describe('auth tools', () => {
     });
 
     describe('isAllowedHost', () => {
+        // Port is now ephemeral (assigned by the OS at listen time) so the
+        // helper takes the actual port as a second arg. 8080 here is just an
+        // arbitrary value that exercises the equality check.
         it('accepts the loopback host on the OAuth port', () => {
-            expect(isAllowedHost('127.0.0.1:8080')).toBe(true);
-            expect(isAllowedHost('localhost:8080')).toBe(true);
+            expect(isAllowedHost('127.0.0.1:8080', 8080)).toBe(true);
+            expect(isAllowedHost('localhost:8080', 8080)).toBe(true);
         });
 
         it('rejects loopback on a different port', () => {
-            expect(isAllowedHost('127.0.0.1:8081')).toBe(false);
-            expect(isAllowedHost('localhost:9000')).toBe(false);
+            expect(isAllowedHost('127.0.0.1:8081', 8080)).toBe(false);
+            expect(isAllowedHost('localhost:9000', 8080)).toBe(false);
         });
 
         it('rejects external hosts (DNS-rebinding defense)', () => {
-            expect(isAllowedHost('evil.example.com:8080')).toBe(false);
-            expect(isAllowedHost('attacker.com')).toBe(false);
+            expect(isAllowedHost('evil.example.com:8080', 8080)).toBe(false);
+            expect(isAllowedHost('attacker.com', 8080)).toBe(false);
         });
 
         it('rejects empty / undefined Host header', () => {
-            expect(isAllowedHost(undefined)).toBe(false);
-            expect(isAllowedHost('')).toBe(false);
+            expect(isAllowedHost(undefined, 8080)).toBe(false);
+            expect(isAllowedHost('', 8080)).toBe(false);
+        });
+
+        it('honors whatever port was actually assigned', () => {
+            // OS-assigned port could be anything in the unprivileged range.
+            expect(isAllowedHost('127.0.0.1:54321', 54321)).toBe(true);
+            expect(isAllowedHost('127.0.0.1:54321', 54322)).toBe(false);
         });
     });
 });

@@ -1,4 +1,5 @@
 import * as http from 'http';
+import type { AddressInfo } from 'net';
 import * as crypto from 'crypto';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { readConfig, writeConfig, deleteConfig } from '../lib/config.js';
@@ -9,8 +10,6 @@ import { isCiEnvironment } from '../lib/ci.js';
 import { getOrganizationIdFromToken } from '../lib/jwt.js';
 import { AuthResponse, TokenResponse } from '../types.js';
 
-const PORT = 8080;
-
 // Exported for tests. Constant-time equality on equal-length inputs;
 // short-circuits to false on length mismatch (which is also constant-time
 // because length is checked before any byte comparison).
@@ -19,19 +18,23 @@ export function statesMatch(a: string, b: string): boolean {
     return crypto.timingSafeEqual(Buffer.from(a), Buffer.from(b));
 }
 
-const ALLOWED_HOSTS = new Set([
-    `localhost:${PORT}`,
-    `127.0.0.1:${PORT}`,
-]);
-
-// Exported for tests.
-export function isAllowedHost(host: string | undefined): boolean {
+// Exported for tests. Port is now ephemeral (assigned by the OS at listen
+// time), so the allowed-host check is parameterised on the actual port.
+export function isAllowedHost(host: string | undefined, port: number): boolean {
     if (!host) return false;
-    return ALLOWED_HOSTS.has(host);
+    return host === `localhost:${port}` || host === `127.0.0.1:${port}`;
 }
 
-async function startLocalServer(state: string): Promise<{ code: string; server: http.Server }> {
+async function startLocalServer(
+    state: string,
+    onListening: (port: number) => Promise<void> | void,
+): Promise<{ code: string; port: number; server: http.Server }> {
     return new Promise((resolve, reject) => {
+        // Captured after server.listen(0) returns so the request handler can
+        // verify the Host header. The handler runs after listen() resolves,
+        // so this is always populated by the time it's read.
+        let listeningPort = 0;
+
         const server = http.createServer((req, res) => {
             // Reject anything but GET — narrows the surface against any local
             // process or browser-side form abuse poking at the callback port.
@@ -44,13 +47,14 @@ async function startLocalServer(state: string): Promise<{ code: string; server: 
             // Host-header check defends against DNS-rebinding scenarios where
             // a remote page tricks the browser into talking to 127.0.0.1.
             // State is the real secret, but pinning Host costs nothing.
-            if (!isAllowedHost(req.headers.host)) {
+            if (!isAllowedHost(req.headers.host, listeningPort)) {
                 res.writeHead(400, { 'Content-Type': 'text/plain' });
                 res.end('Bad Host');
                 return;
             }
 
-            const url = new URL(req.url || '', `http://localhost:${PORT}`);
+            // Base host/port don't matter — we only read pathname/searchParams.
+            const url = new URL(req.url || '', 'http://localhost');
 
             if (url.pathname === '/callback') {
                 const code = url.searchParams.get('code');
@@ -103,15 +107,33 @@ async function startLocalServer(state: string): Promise<{ code: string; server: 
                     </html>
                 `);
 
-                resolve({ code, server });
+                resolve({ code, port: listeningPort, server });
             } else {
                 res.writeHead(404);
                 res.end('Not found');
             }
         });
 
-        server.listen(PORT, '127.0.0.1', () => {
-            // Server ready — caller will open browser
+        // Listen on an ephemeral port so a malicious local process can't
+        // pre-bind a known port (e.g. 8080) to capture the OAuth callback.
+        server.listen(0, '127.0.0.1', async () => {
+            const address = server.address();
+            if (address === null || typeof address === 'string') {
+                server.close();
+                reject(new Error('Failed to determine local callback port'));
+                return;
+            }
+            listeningPort = (address as AddressInfo).port;
+            // Run the caller-supplied side effects (e.g. open the browser)
+            // here, not after `await startLocalServer(...)` returns. The
+            // outer Promise only resolves on the OAuth callback, so anything
+            // the caller does post-await never runs in time.
+            try {
+                await onListening(listeningPort);
+            } catch (err) {
+                server.close();
+                reject(err instanceof Error ? err : new Error(String(err)));
+            }
         });
 
         server.on('error', (err) => {
@@ -182,14 +204,13 @@ export function registerAuthTools(server: McpServer): void {
 
             let localServer: http.Server | null = null;
             try {
-                const { code, server: srv } = await startLocalServer(state);
+                const { code, server: srv } = await startLocalServer(state, async (port) => {
+                    const authUrl = `${API_BASE_URL}/client/auth?state=${state}&scheme=http&port=${port}`;
+                    // Dynamic import for ESM-only package
+                    const { default: open } = await import('open');
+                    await open(authUrl);
+                });
                 localServer = srv;
-
-                const authUrl = `${API_BASE_URL}/client/auth?state=${state}&scheme=http&port=${PORT}`;
-
-                // Dynamic import for ESM-only package
-                const { default: open } = await import('open');
-                await open(authUrl);
 
                 const authResponse = await exchangeCodeForToken(code, state);
 
