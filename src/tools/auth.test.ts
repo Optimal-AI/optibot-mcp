@@ -7,6 +7,11 @@ const mockListOrganizations = vi.fn();
 const mockSanitizeServerText = vi.fn((s: string) => s);
 const mockGetOrgIdFromToken = vi.fn();
 
+// Mock the dynamic `import('open')` inside the login handler so tests can
+// drive the post-listen flow without actually launching a browser.
+const openMock = vi.hoisted(() => vi.fn());
+vi.mock('open', () => ({ default: openMock }));
+
 vi.mock('../lib/config.js', () => ({
     readConfig: (...args: unknown[]) => mockReadConfig(...args),
     writeConfig: (...args: unknown[]) => mockWriteConfig(...args),
@@ -194,9 +199,72 @@ describe('auth tools', () => {
 
         // Note: there used to be a "port 8080 already in use" test here, but
         // the login flow now listens on an ephemeral port (server.listen(0)),
-        // so port collision is no longer a reachable failure mode. The
-        // generic server.on('error', reject) handler still exists in the
-        // production code; it just isn't exercised by a port-collision test.
+        // so port collision is no longer a reachable failure mode.
+
+        it('returns error when browser fails to open', async () => {
+            // open() throwing inside the onListening hook should propagate
+            // through reject → catch block → isError response.
+            openMock.mockRejectedValueOnce(new Error('Cannot open browser'));
+
+            const handler = registeredTools.get('login')!;
+            const result = await handler({});
+
+            expect(result.isError).toBe(true);
+            expect(result.content[0].text).toContain('Authentication failed');
+            expect(result.content[0].text).toContain('Cannot open browser');
+        });
+
+        it('completes happy-path login when callback resolves with valid code+state', async () => {
+            // Simulate the browser visit by hitting /callback ourselves once
+            // open() is invoked. The real http server on the ephemeral port
+            // resolves the OAuth promise and the handler proceeds to token
+            // exchange + organization listing (both mocked via fetch).
+            openMock.mockImplementationOnce(async (authUrl: string) => {
+                const u = new URL(authUrl);
+                const port = u.searchParams.get('port');
+                const state = u.searchParams.get('state');
+                const res = await fetch(`http://127.0.0.1:${port}/callback?code=abc&state=${state}`, {
+                    headers: { Host: `127.0.0.1:${port}` },
+                });
+                // Drain to ensure the server has processed the request.
+                await res.text();
+            });
+
+            // Capture the real fetch BEFORE spying so the localhost callback
+            // request can fall through cleanly. spyOn overwrites globalThis.fetch
+            // and does not expose the original via getMockImplementation.
+            const realFetch = globalThis.fetch;
+            const fetchSpy = vi.spyOn(globalThis, 'fetch');
+            fetchSpy.mockImplementation(async (input: any, init?: any) => {
+                const url = typeof input === 'string' ? input : input.url;
+                if (url.includes('/client/token')) {
+                    return new Response(JSON.stringify({
+                        token: 'jwt.token.value',
+                        expiresIn: 90 * 24 * 60 * 60,
+                        organizationId: 1,
+                        user: { firebaseUserId: 'uid-1', email: 'u@example.com', name: 'U' },
+                    }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+                }
+                // Fall through to real fetch for the localhost callback hit.
+                return realFetch(input as any, init);
+            });
+
+            mockListOrganizations.mockResolvedValueOnce({
+                organizations: [{ id: 1, name: 'Acme' }],
+                currentOrganizationId: 1,
+            });
+            mockGetOrgIdFromToken.mockReturnValueOnce(1);
+            mockWriteConfig.mockResolvedValueOnce(undefined);
+
+            const handler = registeredTools.get('login')!;
+            const result = await handler({});
+
+            expect(result.isError).toBeFalsy();
+            expect(result.content[0].text).toContain('Successfully authenticated');
+            expect(mockWriteConfig).toHaveBeenCalledWith({ apiKey: 'jwt.token.value' });
+
+            fetchSpy.mockRestore();
+        });
 
     });
 
