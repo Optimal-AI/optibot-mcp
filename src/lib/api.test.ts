@@ -43,10 +43,10 @@ describe('ApiClient', () => {
                 'http://test-api.local/api/review',
                 expect.objectContaining({
                     method: 'POST',
-                    headers: {
+                    headers: expect.objectContaining({
                         'Content-Type': 'application/json',
                         'Authorization': 'Bearer test-api-key',
-                    },
+                    }),
                 })
             );
         });
@@ -178,10 +178,10 @@ describe('ApiClient', () => {
                 'http://test-api.local/api/keys',
                 expect.objectContaining({
                     method: 'POST',
-                    headers: {
+                    headers: expect.objectContaining({
                         'Content-Type': 'application/json',
                         'Authorization': 'Bearer test-api-key',
-                    },
+                    }),
                     body: JSON.stringify({ name: 'ci' }),
                 })
             );
@@ -209,7 +209,7 @@ describe('ApiClient', () => {
                 'http://test-api.local/api/keys',
                 expect.objectContaining({
                     method: 'GET',
-                    headers: { 'Authorization': 'Bearer test-api-key' },
+                    headers: expect.objectContaining({ 'Authorization': 'Bearer test-api-key' }),
                 })
             );
         });
@@ -236,7 +236,7 @@ describe('ApiClient', () => {
                 'http://test-api.local/api/keys/k1',
                 expect.objectContaining({
                     method: 'DELETE',
-                    headers: { 'Authorization': 'Bearer test-api-key' },
+                    headers: expect.objectContaining({ 'Authorization': 'Bearer test-api-key' }),
                 })
             );
         });
@@ -278,7 +278,7 @@ describe('ApiClient', () => {
                 'http://test-api.local/api/user/review-status',
                 expect.objectContaining({
                     method: 'GET',
-                    headers: { 'Authorization': 'Bearer test-api-key' },
+                    headers: expect.objectContaining({ 'Authorization': 'Bearer test-api-key' }),
                 })
             );
         });
@@ -322,7 +322,7 @@ describe('ApiClient', () => {
                 'http://test-api.local/client/organizations',
                 expect.objectContaining({
                     method: 'GET',
-                    headers: { 'Authorization': 'Bearer test-api-key' },
+                    headers: expect.objectContaining({ 'Authorization': 'Bearer test-api-key' }),
                 })
             );
         });

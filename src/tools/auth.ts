@@ -4,6 +4,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { readConfig, writeConfig, deleteConfig } from '../lib/config.js';
 import { getApiBaseUrl } from '../lib/apiConfig.js';
 import { ApiClient } from '../lib/api.js';
+import { CLIENT_HEADERS } from '../lib/clientHeaders.js';
 import { sanitizeServerText } from '../lib/output.js';
 import { isCiEnvironment } from '../lib/ci.js';
 import { getOrganizationIdFromToken } from '../lib/jwt.js';
@@ -131,7 +132,7 @@ async function exchangeCodeForToken(code: string, state: string): Promise<AuthRe
     const API_BASE_URL = getApiBaseUrl();
     const response = await fetch(`${API_BASE_URL}/client/token`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { ...CLIENT_HEADERS, 'Content-Type': 'application/json' },
         body: JSON.stringify({ code, state }),
     });
 
