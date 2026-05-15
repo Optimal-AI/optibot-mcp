@@ -17,6 +17,7 @@ import {
     RepositoryStats,
 } from '../types.js';
 import { getApiBaseUrl } from './apiConfig.js';
+import { CLIENT_HEADERS } from './clientHeaders.js';
 
 const API_BASE_URL = getApiBaseUrl();
 
@@ -74,6 +75,7 @@ export class ApiClient {
         const response = await fetch(`${API_BASE_URL}/api/review`, {
             method: 'POST',
             headers: {
+                ...CLIENT_HEADERS,
                 'Content-Type': 'application/json',
                 'Authorization': `Bearer ${this.apiKey}`,
             },
@@ -107,6 +109,7 @@ export class ApiClient {
         const response = await fetch(`${API_BASE_URL}/api/keys`, {
             method: 'POST',
             headers: {
+                ...CLIENT_HEADERS,
                 'Content-Type': 'application/json',
                 'Authorization': `Bearer ${this.apiKey}`,
             },
@@ -124,6 +127,7 @@ export class ApiClient {
         const response = await fetch(`${API_BASE_URL}/api/keys`, {
             method: 'GET',
             headers: {
+                ...CLIENT_HEADERS,
                 'Authorization': `Bearer ${this.apiKey}`,
             },
         });
@@ -140,6 +144,7 @@ export class ApiClient {
         const response = await fetch(`${API_BASE_URL}/api/keys/${encodeURIComponent(id)}`, {
             method: 'DELETE',
             headers: {
+                ...CLIENT_HEADERS,
                 'Authorization': `Bearer ${this.apiKey}`,
             },
         });
@@ -153,6 +158,7 @@ export class ApiClient {
         const response = await fetch(`${API_BASE_URL}/api/user/review-status`, {
             method: 'GET',
             headers: {
+                ...CLIENT_HEADERS,
                 'Authorization': `Bearer ${this.apiKey}`,
             },
         });
@@ -168,6 +174,7 @@ export class ApiClient {
         const response = await fetch(`${API_BASE_URL}/client/organizations`, {
             method: 'GET',
             headers: {
+                ...CLIENT_HEADERS,
                 'Authorization': `Bearer ${this.apiKey}`,
             },
         });
@@ -183,6 +190,7 @@ export class ApiClient {
         const response = await fetch(`${API_BASE_URL}/client/token/rescope`, {
             method: 'POST',
             headers: {
+                ...CLIENT_HEADERS,
                 'Content-Type': 'application/json',
                 'Authorization': `Bearer ${this.apiKey}`,
             },
@@ -199,7 +207,7 @@ export class ApiClient {
     async getSecurityPricing(): Promise<ScanPricingResponse> {
         const response = await fetch(`${API_BASE_URL}/api/security/pricing`, {
             method: 'GET',
-            headers: { 'Authorization': `Bearer ${this.apiKey}` },
+            headers: { ...CLIENT_HEADERS, 'Authorization': `Bearer ${this.apiKey}` },
         });
 
         if (!response.ok) {
@@ -212,7 +220,7 @@ export class ApiClient {
     async getSecurityUsage(): Promise<ScanUsageResponse> {
         const response = await fetch(`${API_BASE_URL}/api/security/usage`, {
             method: 'GET',
-            headers: { 'Authorization': `Bearer ${this.apiKey}` },
+            headers: { ...CLIENT_HEADERS, 'Authorization': `Bearer ${this.apiKey}` },
         });
 
         if (!response.ok) {
@@ -238,7 +246,7 @@ export class ApiClient {
 
         const response = await fetch(url, {
             method: 'GET',
-            headers: { 'Authorization': `Bearer ${this.apiKey}` },
+            headers: { ...CLIENT_HEADERS, 'Authorization': `Bearer ${this.apiKey}` },
         });
 
         if (!response.ok) {
@@ -256,6 +264,7 @@ export class ApiClient {
         const response = await fetch(`${API_BASE_URL}/api/security/scan${qs}`, {
             method: 'POST',
             headers: {
+                ...CLIENT_HEADERS,
                 'Content-Type': 'application/json',
                 'Authorization': `Bearer ${this.apiKey}`,
             },
@@ -274,7 +283,7 @@ export class ApiClient {
             `${API_BASE_URL}/api/organizations/${organizationId}/security-configs`,
             {
                 method: 'GET',
-                headers: { 'Authorization': `Bearer ${this.apiKey}` },
+                headers: { ...CLIENT_HEADERS, 'Authorization': `Bearer ${this.apiKey}` },
             }
         );
 
@@ -294,6 +303,7 @@ export class ApiClient {
             {
                 method: 'PUT',
                 headers: {
+                    ...CLIENT_HEADERS,
                     'Content-Type': 'application/json',
                     'Authorization': `Bearer ${this.apiKey}`,
                 },
@@ -313,7 +323,7 @@ export class ApiClient {
             `${API_BASE_URL}/api/organizations/${organizationId}/repositories/stats`,
             {
                 method: 'GET',
-                headers: { 'Authorization': `Bearer ${this.apiKey}` },
+                headers: { ...CLIENT_HEADERS, 'Authorization': `Bearer ${this.apiKey}` },
             }
         );
 
