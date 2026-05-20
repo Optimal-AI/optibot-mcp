@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.4.0] - 2026-05-20
+
+### Added
+
+- Every backend request now carries `X-Optibot-Client: mcp` and `X-Optibot-Client-Version` headers so the backend can attribute traffic to a specific client and version.
+
 ## [1.3.2] - 2026-05-08
 
 ### Packaging
