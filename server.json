@@ -4,10 +4,6 @@
   "title": "Optibot",
   "description": "AI code review for your AI assistant — review local changes, branch diffs, and patch files.",
   "websiteUrl": "https://getoptimal.ai",
-  "repository": {
-    "url": "https://github.com/Optimal-AI/optibot-mcp",
-    "source": "github"
-  },
   "version": "1.4.1",
   "packages": [
     {
