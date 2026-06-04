@@ -1,6 +1,7 @@
 {
   "name": "@optimalai/optibot-mcp",
-  "version": "1.4.0",
+  "version": "1.4.1",
+  "mcpName": "ai.getoptimal/optibot",
   "description": "MCP server for AI code reviews powered by Optibot",
   "type": "module",
   "main": "./dist/index.js",
