@@ -5,6 +5,7 @@ import * as git from '../lib/git.js';
 import { ApiClient } from '../lib/api.js';
 import { formatReview, formatError } from '../lib/output.js';
 import { ReviewProgressService, ReviewProgressEvent } from '../lib/reviewProgress.js';
+import { waitForReviewResult } from '../lib/reviewPolling.js';
 import { safeSendLog } from '../lib/notify.js';
 
 const ReviewBranchSchema = {
@@ -54,15 +55,25 @@ export function registerReviewTools(server: McpServer): void {
                 const changedFiles = await git.getChangedFiles(repoRoot);
                 const files = await git.getFileContents(changedFiles, repoRoot);
 
-                // Start progress session
+                // Submit async, then watch progress by reviewId and poll for the result.
+                const client = new ApiClient(config.apiKey);
+                const receipt = await client.review({ patch, repositoryName: repoName, files });
+
                 const progressService = new ReviewProgressService();
-                const reviewSessionId = await progressService.startSession((event: ReviewProgressEvent) => {
+                await progressService.startSession((event: ReviewProgressEvent) => {
                     safeSendLog(extra, 'optibot', formatProgressStep(event));
-                });
+                }, receipt.reviewId);
 
                 try {
-                    const client = new ApiClient(config.apiKey);
-                    const response = await client.review({ patch, repositoryName: repoName, files, reviewSessionId });
+                    const result = await waitForReviewResult(client, receipt.reviewId);
+                    if (result.status === 'failed') {
+                        throw new Error(result.error || 'The review failed. Please try again.');
+                    }
+                    const response = {
+                        generalComment: result.generalComment,
+                        fileComments: result.fileComments,
+                        reviewCount: receipt.reviewCount,
+                    };
                     return { content: [{ type: 'text' as const, text: formatReview(response) }] };
                 } finally {
                     progressService.endSession();
@@ -103,24 +114,34 @@ export function registerReviewTools(server: McpServer): void {
                 const changedFiles = await git.getChangedFiles(repoRoot, targetBranch);
                 const files = await git.getFileContents(changedFiles, repoRoot);
 
-                // Start progress session
+                // Submit async, then watch progress by reviewId and poll for the result.
+                const client = new ApiClient(config.apiKey);
+                const receipt = await client.review({ patch, repositoryName: repoName, files });
+
                 const progressService = new ReviewProgressService();
-                const reviewSessionId = await progressService.startSession((event: ReviewProgressEvent) => {
+                await progressService.startSession((event: ReviewProgressEvent) => {
                     safeSendLog(extra, 'optibot', formatProgressStep(event));
-                });
+                }, receipt.reviewId);
 
                 try {
-                    const client = new ApiClient(config.apiKey);
-                    const response = await client.review({ patch, repositoryName: repoName, files, reviewSessionId });
-
-                    let result = '';
-                    if (hasConflicts) {
-                        result += `**Warning:** Merge conflicts detected with ${targetBranch}. Review results may not reflect the final merged state.\n\n`;
+                    const reviewResult = await waitForReviewResult(client, receipt.reviewId);
+                    if (reviewResult.status === 'failed') {
+                        throw new Error(reviewResult.error || 'The review failed. Please try again.');
                     }
-                    result += `Comparing against: ${targetBranch}\n\n`;
-                    result += formatReview(response);
+                    const response = {
+                        generalComment: reviewResult.generalComment,
+                        fileComments: reviewResult.fileComments,
+                        reviewCount: receipt.reviewCount,
+                    };
 
-                    return { content: [{ type: 'text' as const, text: result }] };
+                    let output = '';
+                    if (hasConflicts) {
+                        output += `**Warning:** Merge conflicts detected with ${targetBranch}. Review results may not reflect the final merged state.\n\n`;
+                    }
+                    output += `Comparing against: ${targetBranch}\n\n`;
+                    output += formatReview(response);
+
+                    return { content: [{ type: 'text' as const, text: output }] };
                 } finally {
                     progressService.endSession();
                 }
@@ -145,15 +166,25 @@ export function registerReviewTools(server: McpServer): void {
                     return { content: [{ type: 'text' as const, text: 'The diff file is empty. Nothing to review.' }] };
                 }
 
-                // Start progress session
+                // Submit async, then watch progress by reviewId and poll for the result.
+                const client = new ApiClient(config.apiKey);
+                const receipt = await client.review({ patch });
+
                 const progressService = new ReviewProgressService();
-                const reviewSessionId = await progressService.startSession((event: ReviewProgressEvent) => {
+                await progressService.startSession((event: ReviewProgressEvent) => {
                     safeSendLog(extra, 'optibot', formatProgressStep(event));
-                });
+                }, receipt.reviewId);
 
                 try {
-                    const client = new ApiClient(config.apiKey);
-                    const response = await client.review({ patch, reviewSessionId });
+                    const result = await waitForReviewResult(client, receipt.reviewId);
+                    if (result.status === 'failed') {
+                        throw new Error(result.error || 'The review failed. Please try again.');
+                    }
+                    const response = {
+                        generalComment: result.generalComment,
+                        fileComments: result.fileComments,
+                        reviewCount: receipt.reviewCount,
+                    };
                     return { content: [{ type: 'text' as const, text: formatReview(response) }] };
                 } finally {
                     progressService.endSession();

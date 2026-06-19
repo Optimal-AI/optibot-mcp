@@ -104,28 +104,21 @@ describe('ApiClient', () => {
             expect(callBody.repositoryName).toBeUndefined();
         });
 
-        it('decodes base64 generalComment in response', async () => {
-            const encoded = Buffer.from('Good code').toString('base64');
-            mockOkResponse({ generalComment: encoded });
+        it('sets async true in the request body', async () => {
+            mockOkResponse({ reviewId: 'apirev_x' });
+            await client.review({ patch: 'x' });
 
-            const result = await client.review({ patch: 'x' });
-            expect(result.generalComment).toBe('Good code');
+            const callBody = JSON.parse(fetchMock.mock.calls[0][1].body);
+            expect(callBody.async).toBe(true);
         });
 
-        it('decodes base64 fileComments array in response', async () => {
-            const c1 = Buffer.from('comment 1').toString('base64');
-            const c2 = Buffer.from('comment 2').toString('base64');
-            mockOkResponse({ fileComments: [c1, c2] });
+        it('returns the reviewId and reviewCount from the 202 receipt', async () => {
+            const reviewCount = { current: 5, limit: 100, remaining: 95 };
+            mockOkResponse({ reviewId: 'apirev_abc', reviewCount });
 
             const result = await client.review({ patch: 'x' });
-            expect(result.fileComments).toEqual(['comment 1', 'comment 2']);
-        });
-
-        it('handles response with no generalComment or fileComments', async () => {
-            mockOkResponse({});
-            const result = await client.review({ patch: 'x' });
-            expect(result.generalComment).toBeUndefined();
-            expect(result.fileComments).toBeUndefined();
+            expect(result.reviewId).toBe('apirev_abc');
+            expect(result.reviewCount).toEqual(reviewCount);
         });
 
         it('passes through reviewCount unchanged', async () => {
@@ -296,21 +289,51 @@ describe('ApiClient', () => {
         });
     });
 
-    describe('review with reviewSessionId', () => {
-        it('includes reviewSessionId in body when provided', async () => {
-            mockOkResponse({});
-            await client.review({ patch: 'x', reviewSessionId: 'sess-123' });
+    describe('getReviewResult', () => {
+        it('GETs /api/review/result/:reviewId with auth', async () => {
+            mockOkResponse({ status: 'pending' });
+            await client.getReviewResult('apirev_abc');
 
-            const callBody = JSON.parse(fetchMock.mock.calls[0][1].body);
-            expect(callBody.reviewSessionId).toBe('sess-123');
+            expect(fetchMock).toHaveBeenCalledWith(
+                'http://test-api.local/api/review/result/apirev_abc',
+                expect.objectContaining({
+                    method: 'GET',
+                    headers: expect.objectContaining({ 'Authorization': 'Bearer test-api-key' }),
+                })
+            );
         });
 
-        it('omits reviewSessionId when not provided', async () => {
-            mockOkResponse({});
-            await client.review({ patch: 'x' });
+        it('returns pending while the review runs', async () => {
+            mockOkResponse({ status: 'pending' });
+            expect(await client.getReviewResult('apirev_abc')).toEqual({ status: 'pending' });
+        });
 
-            const callBody = JSON.parse(fetchMock.mock.calls[0][1].body);
-            expect(callBody.reviewSessionId).toBeUndefined();
+        it('decodes base64 comments on a done result', async () => {
+            const gc = Buffer.from('All good').toString('base64');
+            const fc = Buffer.from('line 1').toString('base64');
+            mockOkResponse({ status: 'done', generalComment: gc, fileComments: [fc], isOptibotInstalled: true });
+
+            expect(await client.getReviewResult('apirev_abc')).toEqual({
+                status: 'done',
+                generalComment: 'All good',
+                fileComments: ['line 1'],
+                isOptibotInstalled: true,
+            });
+        });
+
+        it('returns failed with the error message', async () => {
+            mockOkResponse({ status: 'failed', error: 'boom' });
+            expect(await client.getReviewResult('apirev_abc')).toEqual({ status: 'failed', error: 'boom' });
+        });
+
+        it('returns not_found on a 404', async () => {
+            mockErrorResponse(404, { status: 'not_found' });
+            expect(await client.getReviewResult('apirev_abc')).toEqual({ status: 'not_found' });
+        });
+
+        it('throws on a non-404 error', async () => {
+            mockErrorResponse(401, { message: 'Unauthorized' });
+            await expect(client.getReviewResult('apirev_abc')).rejects.toThrow('Unauthorized');
         });
     });
 

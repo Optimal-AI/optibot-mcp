@@ -1,5 +1,6 @@
 import {
-    ReviewResponse,
+    AsyncReviewResponse,
+    ReviewResultResponse,
     ApiKeyCreateResponse,
     ApiKeyListItem,
     ApiKeyListResponse,
@@ -44,22 +45,23 @@ export class ApiClient {
         throw error;
     }
 
+    /**
+     * Request a review asynchronously. Returns a receipt ({ reviewId }) rather
+     * than the review itself: the backend enqueues the work and the result is
+     * fetched separately via {@link getReviewResult}. Requires a backend with
+     * async review support deployed.
+     */
     async review(params: {
         patch: string;
         repositoryName?: string;
         files?: Record<string, string>;
-        reviewSessionId?: string;
-    }): Promise<ReviewResponse> {
+    }): Promise<AsyncReviewResponse> {
         const patchBase64 = Buffer.from(params.patch, 'utf-8').toString('base64');
 
-        const body: Record<string, unknown> = { patch: patchBase64 };
+        const body: Record<string, unknown> = { patch: patchBase64, async: true };
 
         if (params.repositoryName) {
             body.repositoryName = params.repositoryName;
-        }
-
-        if (params.reviewSessionId) {
-            body.reviewSessionId = params.reviewSessionId;
         }
 
         if (params.files && Object.keys(params.files).length > 0) {
@@ -86,20 +88,49 @@ export class ApiClient {
             await this.throwApiError(response);
         }
 
-        const result = await response.json() as ReviewResponse;
+        return await response.json() as AsyncReviewResponse;
+    }
 
-        // Decode base64-encoded fields
-        if (result.generalComment && typeof result.generalComment === 'string') {
-            result.generalComment = Buffer.from(result.generalComment, 'base64').toString('utf-8');
+    /**
+     * Fetch the result of an async review by its reviewId. Returns `pending`
+     * while the review runs, `done` with the decoded payload when it finishes,
+     * `failed` with an error, or `not_found` (HTTP 404) when the reviewId is
+     * unknown or expired.
+     */
+    async getReviewResult(reviewId: string): Promise<ReviewResultResponse> {
+        const response = await fetch(
+            `${API_BASE_URL}/api/review/result/${encodeURIComponent(reviewId)}`,
+            {
+                method: 'GET',
+                headers: {
+                    ...CLIENT_HEADERS,
+                    'Authorization': `Bearer ${this.apiKey}`,
+                },
+            }
+        );
+
+        if (response.status === 404) {
+            return { status: 'not_found' };
         }
 
-        if (result.fileComments && Array.isArray(result.fileComments)) {
-            result.fileComments = result.fileComments.map((comment: string) => {
-                if (typeof comment === 'string') {
-                    return Buffer.from(comment, 'base64').toString('utf-8');
-                }
-                return comment;
-            });
+        if (!response.ok) {
+            await this.throwApiError(response);
+        }
+
+        const result = await response.json() as ReviewResultResponse;
+
+        // Decode base64-encoded comments on a completed review.
+        if (result.status === 'done') {
+            if (typeof result.generalComment === 'string') {
+                result.generalComment = Buffer.from(result.generalComment, 'base64').toString('utf-8');
+            }
+            if (Array.isArray(result.fileComments)) {
+                result.fileComments = result.fileComments.map((comment) =>
+                    typeof comment === 'string'
+                        ? Buffer.from(comment, 'base64').toString('utf-8')
+                        : comment
+                );
+            }
         }
 
         return result;

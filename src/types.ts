@@ -20,6 +20,24 @@ export interface ReviewResponse {
     };
 }
 
+/** Receipt returned by an async `POST /api/review` ({ async: true }). */
+export interface AsyncReviewResponse {
+    reviewId: string;
+    reviewCount?: ReviewResponse['reviewCount'];
+}
+
+/** Result of polling `GET /api/review/result/:reviewId`. */
+export type ReviewResultResponse =
+    | { status: 'pending' }
+    | { status: 'not_found' }
+    | { status: 'failed'; error?: string }
+    | {
+          status: 'done';
+          generalComment?: string;
+          fileComments?: string[];
+          isOptibotInstalled?: boolean;
+      };
+
 export interface ParsedFileComment {
     filePath: string;
     startLine: number;

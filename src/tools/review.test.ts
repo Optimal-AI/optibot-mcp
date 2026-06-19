@@ -15,6 +15,7 @@ const mockCheckMergeConflicts = vi.fn();
 const mockFormatReview = vi.fn();
 const mockFormatError = vi.fn();
 const mockApiReview = vi.fn();
+const mockGetReviewResult = vi.fn();
 const mockStartSession = vi.fn();
 const mockEndSession = vi.fn();
 
@@ -37,6 +38,7 @@ vi.mock('../lib/git.js', () => ({
 vi.mock('../lib/api.js', () => ({
     ApiClient: class {
         review(...args: any[]) { return mockApiReview(...args); }
+        getReviewResult(...args: any[]) { return mockGetReviewResult(...args); }
     },
 }));
 
@@ -82,6 +84,8 @@ describe('review tools', () => {
 
     beforeEach(() => {
         mockStartSession.mockResolvedValue('session-id-123');
+        mockApiReview.mockResolvedValue({ reviewId: 'apirev_test', reviewCount: { current: 1, limit: 5, remaining: 4 } });
+        mockGetReviewResult.mockResolvedValue({ status: 'done', generalComment: 'Good' });
     });
 
     describe('review_local_changes', () => {
@@ -127,7 +131,7 @@ describe('review tools', () => {
             expect(result.content[0].text).toBe('Auth error');
         });
 
-        it('ends progress session even when review fails', async () => {
+        it('returns an error when the submit fails', async () => {
             mockReadConfig.mockResolvedValue({ apiKey: 'key' });
             mockGetRepoRoot.mockResolvedValue('/repo');
             mockGetRepoName.mockResolvedValue('my-repo');
@@ -141,25 +145,46 @@ describe('review tools', () => {
             const result = await handler(mockExtra);
 
             expect(result.isError).toBe(true);
-            expect(mockEndSession).toHaveBeenCalled();
         });
 
-        it('passes reviewSessionId to API client', async () => {
+        it('ends the progress session when the review result fails', async () => {
             mockReadConfig.mockResolvedValue({ apiKey: 'key' });
             mockGetRepoRoot.mockResolvedValue('/repo');
             mockGetRepoName.mockResolvedValue('my-repo');
             mockGetDiffHead.mockResolvedValue('diff');
             mockGetChangedFiles.mockResolvedValue([]);
             mockGetFileContents.mockResolvedValue({});
-            mockApiReview.mockResolvedValue({});
+            mockApiReview.mockResolvedValue({ reviewId: 'apirev_test' });
+            mockGetReviewResult.mockResolvedValue({ status: 'failed', error: 'boom' });
+            mockFormatError.mockReturnValue('Review error');
+
+            const handler = registeredTools.get('review_local_changes')!;
+            const result = await handler(mockExtra);
+
+            expect(result.isError).toBe(true);
+            expect(mockEndSession).toHaveBeenCalled();
+        });
+
+        it('joins the progress room by the reviewId and fetches by it (Option A)', async () => {
+            mockReadConfig.mockResolvedValue({ apiKey: 'key' });
+            mockGetRepoRoot.mockResolvedValue('/repo');
+            mockGetRepoName.mockResolvedValue('my-repo');
+            mockGetDiffHead.mockResolvedValue('diff');
+            mockGetChangedFiles.mockResolvedValue([]);
+            mockGetFileContents.mockResolvedValue({});
+            mockApiReview.mockResolvedValue({ reviewId: 'apirev_test' });
+            mockGetReviewResult.mockResolvedValue({ status: 'done', generalComment: 'Good' });
             mockFormatReview.mockReturnValue('Review');
 
             const handler = registeredTools.get('review_local_changes')!;
             await handler(mockExtra);
 
+            // review() no longer carries a session id; the socket joins by reviewId.
             expect(mockApiReview).toHaveBeenCalledWith(
-                expect.objectContaining({ reviewSessionId: 'session-id-123' })
+                expect.not.objectContaining({ reviewSessionId: expect.anything() })
             );
+            expect(mockStartSession).toHaveBeenCalledWith(expect.any(Function), 'apirev_test');
+            expect(mockGetReviewResult).toHaveBeenCalledWith('apirev_test');
         });
     });
 
