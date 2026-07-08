@@ -92,12 +92,18 @@ export function formatError(error: unknown): string {
     if (code === 'TRIAL_REVIEW_LIMIT_REACHED') {
         const limit = (err?.data as { limit?: number }).limit;
         const upgradeUrl = (err?.data as { upgradeUrl?: string }).upgradeUrl || 'https://agents.getoptimal.ai/dashboard/billing';
-        return `Trial review limit reached. Your organization has used all ${limit} code reviews included in your trial. Upgrade to keep reviewing: ${upgradeUrl}`;
+        const detail = limit != null
+            ? `Your organization has used all ${limit} code reviews included in your trial.`
+            : 'Your organization has reached its trial review limit.';
+        return `Trial review limit reached. ${detail} Upgrade to keep reviewing: ${upgradeUrl}`;
     }
     if (code === 'MAX_REVIEW_LIMIT_REACHED') {
         const limit = (err?.data as { limit?: number }).limit;
         const contactUrl = (err?.data as { contactUrl?: string }).contactUrl || 'https://getoptimal.ai/contact';
-        return `Review limit reached. Your organization has reached its limit of ${limit} code reviews. Contact us to raise it: ${contactUrl}`;
+        const detail = limit != null
+            ? `Your organization has reached its limit of ${limit} code reviews.`
+            : 'Your organization has reached its review limit.';
+        return `Review limit reached. ${detail} Contact us to raise it: ${contactUrl}`;
     }
 
     if (status === 401) {

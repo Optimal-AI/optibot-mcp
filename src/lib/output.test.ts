@@ -248,4 +248,16 @@ describe('formatError', () => {
         expect(msg).toContain('limit of 100 code reviews');
         expect(msg).toContain('https://getoptimal.ai/contact');
     });
+
+    it('returns the trial-limit message without "undefined" when limit is missing', () => {
+        const msg = formatError({ status: 429, data: { code: 'TRIAL_REVIEW_LIMIT_REACHED', upgradeUrl: 'https://agents.getoptimal.ai/dashboard/billing' } });
+        expect(msg.toLowerCase()).toContain('trial review limit');
+        expect(msg).not.toContain('undefined');
+    });
+
+    it('returns the global-limit message without "undefined" when limit is missing', () => {
+        const msg = formatError({ status: 429, data: { code: 'MAX_REVIEW_LIMIT_REACHED', contactUrl: 'https://getoptimal.ai/contact' } });
+        expect(msg.toLowerCase()).toContain('review limit');
+        expect(msg).not.toContain('undefined');
+    });
 });
