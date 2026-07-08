@@ -260,4 +260,18 @@ describe('formatError', () => {
         expect(msg.toLowerCase()).toContain('review limit');
         expect(msg).not.toContain('undefined');
     });
+
+    it('strips control-char injection from a server-supplied upgradeUrl (trial)', () => {
+        const msg = formatError({ status: 429, data: { code: 'TRIAL_REVIEW_LIMIT_REACHED', limit: 5, upgradeUrl: '\x1b]0;hijack\x07https://agents.getoptimal.ai/dashboard/billing' } });
+        expect(msg).not.toContain('\x1b]0;');
+        expect(msg).not.toContain('\x07');
+        expect(msg).toContain('https://agents.getoptimal.ai/dashboard/billing');
+    });
+
+    it('strips control-char injection from a server-supplied contactUrl and limit (global)', () => {
+        const msg = formatError({ status: 429, data: { code: 'MAX_REVIEW_LIMIT_REACHED', limit: '\x1b]0;x\x0742', contactUrl: '\x1b]0;hijack\x07https://getoptimal.ai/contact' } });
+        expect(msg).not.toContain('\x1b]0;');
+        expect(msg).not.toContain('\x07');
+        expect(msg).toContain('https://getoptimal.ai/contact');
+    });
 });

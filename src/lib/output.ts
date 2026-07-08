@@ -91,16 +91,16 @@ export function formatError(error: unknown): string {
     const code = (err?.data as { code?: string } | undefined)?.code;
     if (code === 'TRIAL_REVIEW_LIMIT_REACHED') {
         const limit = (err?.data as { limit?: number }).limit;
-        const upgradeUrl = (err?.data as { upgradeUrl?: string }).upgradeUrl || 'https://agents.getoptimal.ai/dashboard/billing';
-        const detail = limit != null
+        const upgradeUrl = sanitizeServerText((err?.data as { upgradeUrl?: string }).upgradeUrl || 'https://agents.getoptimal.ai/dashboard/billing');
+        const detail = Number.isFinite(limit)
             ? `Your organization has used all ${limit} code reviews included in your trial.`
             : 'Your organization has reached its trial review limit.';
         return `Trial review limit reached. ${detail} Upgrade to keep reviewing: ${upgradeUrl}`;
     }
     if (code === 'MAX_REVIEW_LIMIT_REACHED') {
         const limit = (err?.data as { limit?: number }).limit;
-        const contactUrl = (err?.data as { contactUrl?: string }).contactUrl || 'https://getoptimal.ai/contact';
-        const detail = limit != null
+        const contactUrl = sanitizeServerText((err?.data as { contactUrl?: string }).contactUrl || 'https://getoptimal.ai/contact');
+        const detail = Number.isFinite(limit)
             ? `Your organization has reached its limit of ${limit} code reviews.`
             : 'Your organization has reached its review limit.';
         return `Review limit reached. ${detail} Contact us to raise it: ${contactUrl}`;
