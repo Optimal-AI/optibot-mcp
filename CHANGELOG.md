@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.5.0] - 2026-08-12
+
+### Changed
+
+- Trial and global review-limit messages now show the used count alongside the limit ("used 30 of 30 code reviews") when the backend reports it, instead of only the limit. When the used count is absent or invalid, the previous limit-only phrasing is preserved.
+
 ## [1.4.0] - 2026-05-20
 
 ### Added
