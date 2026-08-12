@@ -235,18 +235,36 @@ describe('formatError', () => {
         expect(msg).toBe('Forbidden');
     });
 
-    it('returns the trial-limit message with upgrade URL for TRIAL_REVIEW_LIMIT_REACHED', () => {
-        const msg = formatError({ status: 429, data: { code: 'TRIAL_REVIEW_LIMIT_REACHED', limit: 30, upgradeUrl: 'https://agents.getoptimal.ai/dashboard/billing' } });
+    it('returns the trial-limit message with used count and upgrade URL for TRIAL_REVIEW_LIMIT_REACHED', () => {
+        const msg = formatError({ status: 429, data: { code: 'TRIAL_REVIEW_LIMIT_REACHED', limit: 30, used: 30, upgradeUrl: 'https://agents.getoptimal.ai/dashboard/billing' } });
         expect(msg).toContain('Trial review limit reached');
-        expect(msg).toContain('all 30 code reviews');
+        expect(msg).toContain('used 30 of 30 code reviews');
         expect(msg).toContain('https://agents.getoptimal.ai/dashboard/billing');
     });
 
-    it('returns the global-limit message with contact URL for MAX_REVIEW_LIMIT_REACHED', () => {
-        const msg = formatError({ status: 429, data: { code: 'MAX_REVIEW_LIMIT_REACHED', limit: 100, contactUrl: 'https://getoptimal.ai/contact' } });
+    it('falls back to limit-only trial phrasing when used is absent', () => {
+        const msg = formatError({ status: 429, data: { code: 'TRIAL_REVIEW_LIMIT_REACHED', limit: 30, upgradeUrl: 'https://agents.getoptimal.ai/dashboard/billing' } });
+        expect(msg).toContain('all 30 code reviews');
+        expect(msg).not.toContain('30 of 30');
+    });
+
+    it('falls back to limit-only trial phrasing when used is invalid', () => {
+        const msg = formatError({ status: 429, data: { code: 'TRIAL_REVIEW_LIMIT_REACHED', limit: 30, used: -1, upgradeUrl: 'https://agents.getoptimal.ai/dashboard/billing' } });
+        expect(msg).toContain('all 30 code reviews');
+        expect(msg).not.toContain('used -1');
+    });
+
+    it('returns the global-limit message with used count and contact URL for MAX_REVIEW_LIMIT_REACHED', () => {
+        const msg = formatError({ status: 429, data: { code: 'MAX_REVIEW_LIMIT_REACHED', limit: 100, used: 100, contactUrl: 'https://getoptimal.ai/contact' } });
         expect(msg).toContain('Review limit reached');
-        expect(msg).toContain('limit of 100 code reviews');
+        expect(msg).toContain('used 100 of 100 code reviews');
         expect(msg).toContain('https://getoptimal.ai/contact');
+    });
+
+    it('falls back to limit-only global phrasing when used is absent', () => {
+        const msg = formatError({ status: 429, data: { code: 'MAX_REVIEW_LIMIT_REACHED', limit: 100, contactUrl: 'https://getoptimal.ai/contact' } });
+        expect(msg).toContain('limit of 100 code reviews');
+        expect(msg).not.toContain('used 100 of 100');
     });
 
     it('returns the trial-limit message without "undefined" when limit is missing', () => {
