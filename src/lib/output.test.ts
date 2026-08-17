@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { sanitizeServerText, parseFileComments, formatReview, formatResetTime, formatError } from './output.js';
+import { sanitizeServerText, parseFileComments, formatReview, formatAgentReview, formatResetTime, formatError } from './output.js';
+import { AgentReviewResponse, AgentReviewFinding } from '../types.js';
 
 describe('sanitizeServerText', () => {
     it('passes through normal text unchanged', () => {
@@ -291,5 +292,137 @@ describe('formatError', () => {
         expect(msg).not.toContain('\x1b]0;');
         expect(msg).not.toContain('\x07');
         expect(msg).toContain('https://getoptimal.ai/contact');
+    });
+});
+
+describe('formatAgentReview', () => {
+    function makeFinding(overrides: Partial<AgentReviewFinding> = {}): AgentReviewFinding {
+        return {
+            id: 'AF-1a2b3c',
+            file: 'src/auth.ts',
+            startLine: 42,
+            endLine: 45,
+            inPatch: true,
+            severity: 'blocker',
+            category: 'bug',
+            message: 'Missing null check reachable from the login path.',
+            confidence: 8,
+            ...overrides,
+        };
+    }
+
+    function makeResponse(overrides: Partial<AgentReviewResponse> = {}): AgentReviewResponse {
+        return {
+            status: 'needs_changes',
+            reviewPass: false,
+            findings: [makeFinding()],
+            summary: 'One blocker found.',
+            reviewCount: { current: 1, limit: 50, remaining: 49 },
+            isOptibotInstalled: true,
+            meta: { mode: 'agent', durationMs: 8300 },
+            ...overrides,
+        };
+    }
+
+    it('renders the status header, summary, and finding count', () => {
+        const out = formatAgentReview(makeResponse());
+        expect(out).toContain('Optibot agent review');
+        expect(out).toContain('Needs changes');
+        expect(out).toContain('Findings: 1');
+        expect(out).toContain('One blocker found.');
+    });
+
+    it('renders a looks_good status', () => {
+        const out = formatAgentReview(makeResponse({ status: 'looks_good', reviewPass: true, findings: [], summary: '' }));
+        expect(out).toContain('Looks good');
+        expect(out).toContain('No findings');
+    });
+
+    it('renders severity + category + file:line + confidence + id for each finding', () => {
+        const out = formatAgentReview(makeResponse());
+        expect(out).toContain('[Blocker · bug] src/auth.ts:42-45');
+        expect(out).toContain('confidence:** 8/10');
+        expect(out).toContain('`AF-1a2b3c`');
+        expect(out).toContain('Missing null check');
+    });
+
+    it('collapses a single-line range', () => {
+        const out = formatAgentReview(makeResponse({ findings: [makeFinding({ startLine: 10, endLine: 10 })] }));
+        expect(out).toContain('src/auth.ts:10');
+        expect(out).not.toContain('src/auth.ts:10-10');
+    });
+
+    it('renders the suggested fix in a code block when present', () => {
+        const out = formatAgentReview(makeResponse({ findings: [makeFinding({ suggestedFix: 'if (!user) return;' })] }));
+        expect(out).toContain('Suggested fix');
+        expect(out).toContain('if (!user) return;');
+    });
+
+    it('marks findings that fall outside the changed lines', () => {
+        const out = formatAgentReview(makeResponse({ findings: [makeFinding({ inPatch: false })] }));
+        expect(out).toContain('outside the changed lines');
+    });
+
+    it('includes the severity breakdown bar', () => {
+        const out = formatAgentReview(makeResponse());
+        expect(out).toContain('Severity breakdown');
+        expect(out).toContain('Blocker');
+        expect(out).toContain('1/1');
+    });
+
+    it('includes the signal-vs-noise classification rubric when there are findings', () => {
+        const out = formatAgentReview(makeResponse());
+        expect(out).toContain('Signal vs noise');
+        expect(out).toContain('real issue');
+        expect(out).toContain('valid suggestion');
+        expect(out).toContain('Noise');
+        expect(out).toContain('Signal-to-noise ratio');
+        expect(out).toContain('| # | id | file:line | severity | verdict | why |');
+    });
+
+    it('omits the signal/noise rubric when there are no findings', () => {
+        const out = formatAgentReview(makeResponse({ findings: [], summary: '' }));
+        expect(out).not.toContain('Signal vs noise');
+    });
+
+    it('lists missingContext with a re-run note', () => {
+        const out = formatAgentReview(makeResponse({ missingContext: ['src/db.ts', 'src/user.ts'] }));
+        expect(out).toContain('Missing context');
+        expect(out).toContain('`src/db.ts`');
+        expect(out).toContain('`src/user.ts`');
+        expect(out).toContain('re-run');
+    });
+
+    it('renders the review count footer', () => {
+        const out = formatAgentReview(makeResponse());
+        expect(out).toContain('Reviews used: 1/50 (49 remaining)');
+    });
+
+    it('echoes model and provider from meta when present', () => {
+        const out = formatAgentReview(makeResponse({ meta: { mode: 'agent', durationMs: 5000, model: 'claude-sonnet-5', provider: 'anthropic' } }));
+        expect(out).toContain('model: claude-sonnet-5');
+        expect(out).toContain('provider: anthropic');
+    });
+
+    it('sanitizes control chars in server-supplied finding text', () => {
+        const out = formatAgentReview(makeResponse({ findings: [makeFinding({ message: '\x1b[31mBoom\x1b[0m', file: 'src/x\x07.ts' })] }));
+        expect(out).toContain('Boom');
+        expect(out).not.toContain('\x1b');
+        expect(out).not.toContain('\x07');
+    });
+
+    it('counts severities correctly across mixed findings', () => {
+        const out = formatAgentReview(makeResponse({
+            findings: [
+                makeFinding({ id: 'a', severity: 'blocker' }),
+                makeFinding({ id: 'b', severity: 'warning' }),
+                makeFinding({ id: 'c', severity: 'nit' }),
+                makeFinding({ id: 'd', severity: 'warning' }),
+            ],
+        }));
+        expect(out).toContain('Findings: 4');
+        expect(out).toMatch(/Blocker\s+\S+\s+\d+%\s+1\/4/);
+        expect(out).toMatch(/Warning\s+\S+\s+\d+%\s+2\/4/);
+        expect(out).toMatch(/Nit\s+\S+\s+\d+%\s+1\/4/);
     });
 });
