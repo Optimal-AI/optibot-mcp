@@ -27,10 +27,16 @@ export class ReviewProgressService {
     private progressCallback: ProgressCallback | null = null;
     private connectionTimeout: NodeJS.Timeout | null = null;
 
-    async startSession(onProgress: ProgressCallback): Promise<string> {
+    /**
+     * Open the progress socket and join a review's room. Pass `sessionId` to join
+     * a known room — for async reviews this is the server's reviewId, so progress
+     * events reach this client (handshake "Option A"). When omitted, a random id
+     * is generated (legacy behavior).
+     */
+    async startSession(onProgress: ProgressCallback, sessionId?: string): Promise<string> {
         this.cleanup();
 
-        this.sessionId = randomUUID();
+        this.sessionId = sessionId ?? randomUUID();
         this.progressCallback = onProgress;
 
         return new Promise((resolve) => {
