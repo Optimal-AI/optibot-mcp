@@ -13,8 +13,10 @@ const mockGetFileContents = vi.fn();
 const mockDetectBaseBranch = vi.fn();
 const mockCheckMergeConflicts = vi.fn();
 const mockFormatReview = vi.fn();
+const mockFormatAgentReview = vi.fn();
 const mockFormatError = vi.fn();
 const mockApiReview = vi.fn();
+const mockApiReviewAgent = vi.fn();
 const mockStartSession = vi.fn();
 const mockEndSession = vi.fn();
 
@@ -37,11 +39,13 @@ vi.mock('../lib/git.js', () => ({
 vi.mock('../lib/api.js', () => ({
     ApiClient: class {
         review(...args: any[]) { return mockApiReview(...args); }
+        reviewAgent(...args: any[]) { return mockApiReviewAgent(...args); }
     },
 }));
 
 vi.mock('../lib/output.js', () => ({
     formatReview: (...args: any[]) => mockFormatReview(...args),
+    formatAgentReview: (...args: any[]) => mockFormatAgentReview(...args),
     formatError: (...args: any[]) => mockFormatError(...args),
 }));
 
@@ -72,8 +76,9 @@ describe('review tools', () => {
         registerReviewTools(server);
     });
 
-    it('registers three review tools', () => {
+    it('registers all review tools', () => {
         expect(registeredTools.has('review_local_changes')).toBe(true);
+        expect(registeredTools.has('review_agent')).toBe(true);
         expect(registeredTools.has('review_branch')).toBe(true);
         expect(registeredTools.has('review_diff_file')).toBe(true);
     });
@@ -160,6 +165,69 @@ describe('review tools', () => {
             expect(mockApiReview).toHaveBeenCalledWith(
                 expect.objectContaining({ reviewSessionId: 'session-id-123' })
             );
+        });
+    });
+
+    describe('review_agent', () => {
+        it('returns formatted agent review on success', async () => {
+            mockReadConfig.mockResolvedValue({ apiKey: 'key' });
+            mockGetRepoRoot.mockResolvedValue('/repo');
+            mockGetRepoName.mockResolvedValue('my-repo');
+            mockGetDiffHead.mockResolvedValue('diff content');
+            mockGetChangedFiles.mockResolvedValue([{ relativePath: 'a.ts', status: 'M' }]);
+            mockGetFileContents.mockResolvedValue({ 'a.ts': 'contents' });
+            mockApiReviewAgent.mockResolvedValue({ status: 'needs_changes', findings: [] });
+            mockFormatAgentReview.mockReturnValue('Agent review output');
+
+            const handler = registeredTools.get('review_agent')!;
+            const result = await handler(mockExtra);
+
+            expect(result.content[0].text).toBe('Agent review output');
+            expect(result.isError).toBeUndefined();
+            expect(mockApiReviewAgent).toHaveBeenCalledWith(
+                expect.objectContaining({ patch: 'diff content', repositoryName: 'my-repo', files: { 'a.ts': 'contents' } })
+            );
+        });
+
+        it('returns "No changes" when diff is empty', async () => {
+            mockReadConfig.mockResolvedValue({ apiKey: 'key' });
+            mockGetRepoRoot.mockResolvedValue('/repo');
+            mockGetRepoName.mockResolvedValue('my-repo');
+            mockGetDiffHead.mockResolvedValue('');
+
+            const handler = registeredTools.get('review_agent')!;
+            const result = await handler(mockExtra);
+
+            expect(result.content[0].text).toBe('No changes to review.');
+            expect(mockApiReviewAgent).not.toHaveBeenCalled();
+        });
+
+        it('returns error when not authenticated', async () => {
+            mockReadConfig.mockRejectedValue(new Error('Not authenticated'));
+            mockFormatError.mockReturnValue('Auth error');
+
+            const handler = registeredTools.get('review_agent')!;
+            const result = await handler(mockExtra);
+
+            expect(result.isError).toBe(true);
+            expect(result.content[0].text).toBe('Auth error');
+        });
+
+        it('returns error when the agent review API fails', async () => {
+            mockReadConfig.mockResolvedValue({ apiKey: 'key' });
+            mockGetRepoRoot.mockResolvedValue('/repo');
+            mockGetRepoName.mockResolvedValue('my-repo');
+            mockGetDiffHead.mockResolvedValue('diff');
+            mockGetChangedFiles.mockResolvedValue([]);
+            mockGetFileContents.mockResolvedValue({});
+            mockApiReviewAgent.mockRejectedValue(new Error('API down'));
+            mockFormatError.mockReturnValue('API error');
+
+            const handler = registeredTools.get('review_agent')!;
+            const result = await handler(mockExtra);
+
+            expect(result.isError).toBe(true);
+            expect(result.content[0].text).toBe('API error');
         });
     });
 

@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { readConfig } from '../lib/config.js';
 import * as git from '../lib/git.js';
 import { ApiClient } from '../lib/api.js';
-import { formatReview, formatError } from '../lib/output.js';
+import { formatReview, formatAgentReview, formatError } from '../lib/output.js';
 import { ReviewProgressService, ReviewProgressEvent } from '../lib/reviewProgress.js';
 import { safeSendLog } from '../lib/notify.js';
 
@@ -67,6 +67,39 @@ export function registerReviewTools(server: McpServer): void {
                 } finally {
                     progressService.endSession();
                 }
+            } catch (err) {
+                return { content: [{ type: 'text' as const, text: formatError(err) }], isError: true };
+            }
+        }
+    );
+
+    // Tool: review_agent
+    // Agent-mode review of uncommitted local changes. Unlike the full-mode
+    // tools, this returns STRUCTURED findings (severity/category/confidence,
+    // stable ids) as native JSON in a single synchronous pass — the server
+    // runs no tools, so the caller front-loads the changed files. Designed for
+    // a coding-agent host that can act on findings and re-run with more context.
+    server.tool(
+        'review_agent',
+        'Agent-mode code review of uncommitted local changes (git diff HEAD). Returns structured findings (severity, category, confidence, stable ids) plus a signal-vs-noise rubric for the host to classify. Single synchronous pass, no server-side tools. Prefer this when a coding agent holds the working copy and will act on the findings.',
+        async (extra) => {
+            try {
+                const config = await readConfig();
+                const repoRoot = await git.getRepoRoot();
+                const repoName = await git.getRepoName();
+
+                const patch = await git.getDiffHead(repoRoot);
+
+                if (!patch.trim()) {
+                    return { content: [{ type: 'text' as const, text: 'No changes to review.' }] };
+                }
+
+                const changedFiles = await git.getChangedFiles(repoRoot);
+                const files = await git.getFileContents(changedFiles, repoRoot);
+
+                const client = new ApiClient(config.apiKey);
+                const response = await client.reviewAgent({ patch, repositoryName: repoName, files });
+                return { content: [{ type: 'text' as const, text: formatAgentReview(response) }] };
             } catch (err) {
                 return { content: [{ type: 'text' as const, text: formatError(err) }], isError: true };
             }
