@@ -88,6 +88,32 @@ export function formatError(error: unknown): string {
     const err = error as any;
     const status = err?.status;
 
+    const code = (err?.data as { code?: string } | undefined)?.code;
+    if (code === 'TRIAL_REVIEW_LIMIT_REACHED') {
+        const limit = (err?.data as { limit?: number }).limit;
+        const used = (err?.data as { used?: number }).used;
+        const hasUsed = typeof used === 'number' && Number.isFinite(used) && used >= 0;
+        const upgradeUrl = sanitizeServerText((err?.data as { upgradeUrl?: string }).upgradeUrl || 'https://agents.getoptimal.ai/dashboard/billing');
+        const detail = Number.isFinite(limit)
+            ? hasUsed
+                ? `Your organization has used ${used} of ${limit} code reviews included in your trial.`
+                : `Your organization has used all ${limit} code reviews included in your trial.`
+            : 'Your organization has reached its trial review limit.';
+        return `Trial review limit reached. ${detail} Upgrade to keep reviewing: ${upgradeUrl}`;
+    }
+    if (code === 'MAX_REVIEW_LIMIT_REACHED') {
+        const limit = (err?.data as { limit?: number }).limit;
+        const used = (err?.data as { used?: number }).used;
+        const hasUsed = typeof used === 'number' && Number.isFinite(used) && used >= 0;
+        const contactUrl = sanitizeServerText((err?.data as { contactUrl?: string }).contactUrl || 'https://getoptimal.ai/contact');
+        const detail = Number.isFinite(limit)
+            ? hasUsed
+                ? `Your organization has used ${used} of ${limit} code reviews.`
+                : `Your organization has reached its limit of ${limit} code reviews.`
+            : 'Your organization has reached its review limit.';
+        return `Review limit reached. ${detail} Contact us to raise it: ${contactUrl}`;
+    }
+
     if (status === 401) {
         return 'Authentication failed. Check that your API key is valid and starts with "optk_". Set OPTIBOT_API_KEY environment variable or use the login tool.';
     } else if (status === 429) {
