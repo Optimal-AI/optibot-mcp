@@ -20,6 +20,71 @@ export interface ReviewResponse {
     };
 }
 
+// ------ Agent review mode ------
+// Ported from optibot-be/src/types/agentReview.ts. Agent mode returns
+// structured findings as native JSON (NOT base64-encoded, unlike full mode).
+
+export type FindingSeverity = 'blocker' | 'warning' | 'nit';
+
+export type FindingCategory =
+    | 'bug'
+    | 'security'
+    | 'performance'
+    | 'refactor'
+    | 'tech-debt'
+    | 'duplicate'
+    | 'style'
+    | 'documentation'
+    | 'test'
+    | 'other';
+
+export interface AgentReviewFinding {
+    /** Stable across iterations: hash of file + category + normalized message (NOT line numbers). */
+    id: string;
+    file: string;
+    startLine: number;
+    endLine: number;
+    /** false = valid finding whose lines fall outside the diff's changed ranges. */
+    inPatch: boolean;
+    severity: FindingSeverity;
+    category: FindingCategory;
+    /** Raw reviewer text — no wrapper, no jump link. */
+    message: string;
+    suggestedFix?: string;
+    /** 1-10, surfaced from the reviewer. */
+    confidence: number;
+}
+
+export interface AgentReviewCountInfo {
+    current: number;
+    limit: number;
+    remaining: number;
+    resetAt?: string;
+}
+
+export interface AgentReviewResponse {
+    status: 'needs_changes' | 'looks_good';
+    reviewPass: boolean;
+    findings: AgentReviewFinding[];
+    summary: string;
+    /** File paths the reviewer needed but wasn't given — caller reads them locally and resubmits. */
+    missingContext?: string[];
+    reviewCount: AgentReviewCountInfo;
+    isOptibotInstalled: boolean;
+    meta: { mode: 'agent'; durationMs: number; model?: string; provider?: string };
+}
+
+export interface AgentReviewRequest {
+    patch: string;
+    repositoryName?: string;
+    /** Changed files: filePath -> raw (unencoded) content; the client base64-encodes them. */
+    files?: Record<string, string>;
+    /** Caller-gathered context beyond the diff (callers, imports, tests). */
+    relatedFiles?: Record<string, string>;
+    /** Plain-text (NOT base64) output of a local tsc/eslint/LSP run. */
+    localDiagnostics?: string;
+}
+
 export interface ParsedFileComment {
     filePath: string;
     startLine: number;

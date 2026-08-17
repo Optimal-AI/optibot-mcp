@@ -1,5 +1,6 @@
 import {
     ReviewResponse,
+    AgentReviewResponse,
     ApiKeyCreateResponse,
     ApiKeyListItem,
     ApiKeyListResponse,
@@ -103,6 +104,63 @@ export class ApiClient {
         }
 
         return result;
+    }
+
+    async reviewAgent(params: {
+        patch: string;
+        repositoryName?: string;
+        files?: Record<string, string>;
+        relatedFiles?: Record<string, string>;
+        localDiagnostics?: string;
+    }): Promise<AgentReviewResponse> {
+        const patchBase64 = Buffer.from(params.patch, 'utf-8').toString('base64');
+
+        const body: Record<string, unknown> = { patch: patchBase64 };
+
+        if (params.repositoryName) {
+            body.repositoryName = params.repositoryName;
+        }
+
+        // Base64-encode changed files and related-context files. Use
+        // null-prototype maps: filenames from a repo are untrusted input
+        // (a file literally named `__proto__` would otherwise pollute).
+        if (params.files && Object.keys(params.files).length > 0) {
+            const encodedFiles: Record<string, string> = Object.create(null);
+            for (const [filePath, content] of Object.entries(params.files)) {
+                encodedFiles[filePath] = Buffer.from(content, 'utf-8').toString('base64');
+            }
+            body.files = encodedFiles;
+        }
+
+        if (params.relatedFiles && Object.keys(params.relatedFiles).length > 0) {
+            const encodedRelated: Record<string, string> = Object.create(null);
+            for (const [filePath, content] of Object.entries(params.relatedFiles)) {
+                encodedRelated[filePath] = Buffer.from(content, 'utf-8').toString('base64');
+            }
+            body.relatedFiles = encodedRelated;
+        }
+
+        // localDiagnostics is plain text (NOT base64), per the backend contract.
+        if (params.localDiagnostics) {
+            body.localDiagnostics = params.localDiagnostics;
+        }
+
+        const response = await fetch(`${API_BASE_URL}/api/review/agent`, {
+            method: 'POST',
+            headers: {
+                ...CLIENT_HEADERS,
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${this.apiKey}`,
+            },
+            body: JSON.stringify(body),
+        });
+
+        if (!response.ok) {
+            await this.throwApiError(response);
+        }
+
+        // Agent-mode response is native JSON — no base64 decode pass.
+        return await response.json() as AgentReviewResponse;
     }
 
     async createApiKey(name: string): Promise<ApiKeyCreateResponse> {

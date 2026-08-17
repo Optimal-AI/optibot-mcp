@@ -169,6 +169,117 @@ describe('ApiClient', () => {
         });
     });
 
+    describe('reviewAgent', () => {
+        it('sends POST to /api/review/agent with correct headers', async () => {
+            mockOkResponse({});
+            await client.reviewAgent({ patch: 'diff' });
+
+            expect(fetchMock).toHaveBeenCalledWith(
+                'http://test-api.local/api/review/agent',
+                expect.objectContaining({
+                    method: 'POST',
+                    headers: expect.objectContaining({
+                        'Content-Type': 'application/json',
+                        'Authorization': 'Bearer test-api-key',
+                    }),
+                })
+            );
+        });
+
+        it('base64-encodes the patch in the request body', async () => {
+            mockOkResponse({});
+            await client.reviewAgent({ patch: 'hello diff' });
+
+            const callBody = JSON.parse(fetchMock.mock.calls[0][1].body);
+            expect(callBody.patch).toBe(Buffer.from('hello diff').toString('base64'));
+        });
+
+        it('base64-encodes file contents when files are provided', async () => {
+            mockOkResponse({});
+            await client.reviewAgent({ patch: 'x', files: { 'a.ts': 'file content' } });
+
+            const callBody = JSON.parse(fetchMock.mock.calls[0][1].body);
+            expect(callBody.files['a.ts']).toBe(Buffer.from('file content').toString('base64'));
+        });
+
+        it('base64-encodes relatedFiles when provided', async () => {
+            mockOkResponse({});
+            await client.reviewAgent({ patch: 'x', relatedFiles: { 'b.ts': 'related' } });
+
+            const callBody = JSON.parse(fetchMock.mock.calls[0][1].body);
+            expect(callBody.relatedFiles['b.ts']).toBe(Buffer.from('related').toString('base64'));
+        });
+
+        it('sends localDiagnostics as plain text (not base64)', async () => {
+            mockOkResponse({});
+            await client.reviewAgent({ patch: 'x', localDiagnostics: 'tsc: error TS2304' });
+
+            const callBody = JSON.parse(fetchMock.mock.calls[0][1].body);
+            expect(callBody.localDiagnostics).toBe('tsc: error TS2304');
+        });
+
+        it('omits files, relatedFiles, and localDiagnostics when not provided', async () => {
+            mockOkResponse({});
+            await client.reviewAgent({ patch: 'x' });
+
+            const callBody = JSON.parse(fetchMock.mock.calls[0][1].body);
+            expect(callBody.files).toBeUndefined();
+            expect(callBody.relatedFiles).toBeUndefined();
+            expect(callBody.localDiagnostics).toBeUndefined();
+        });
+
+        it('omits files and relatedFiles when empty objects', async () => {
+            mockOkResponse({});
+            await client.reviewAgent({ patch: 'x', files: {}, relatedFiles: {} });
+
+            const callBody = JSON.parse(fetchMock.mock.calls[0][1].body);
+            expect(callBody.files).toBeUndefined();
+            expect(callBody.relatedFiles).toBeUndefined();
+        });
+
+        it('includes repositoryName when provided', async () => {
+            mockOkResponse({});
+            await client.reviewAgent({ patch: 'x', repositoryName: 'my-repo' });
+
+            const callBody = JSON.parse(fetchMock.mock.calls[0][1].body);
+            expect(callBody.repositoryName).toBe('my-repo');
+        });
+
+        it('returns the native-JSON response without decoding', async () => {
+            const body = {
+                status: 'needs_changes',
+                reviewPass: false,
+                findings: [{ id: 'AF-1', file: 'a.ts', startLine: 1, endLine: 2, inPatch: true, severity: 'blocker', category: 'bug', message: 'plain text', confidence: 8 }],
+                summary: 'plain summary',
+                reviewCount: { current: 1, limit: 50, remaining: 49 },
+                isOptibotInstalled: true,
+                meta: { mode: 'agent', durationMs: 1234 },
+            };
+            mockOkResponse(body);
+
+            const result = await client.reviewAgent({ patch: 'x' });
+            expect(result.summary).toBe('plain summary');
+            expect(result.findings[0].message).toBe('plain text');
+            expect(result.status).toBe('needs_changes');
+        });
+
+        it('throws error with message from API when response is not ok', async () => {
+            mockErrorResponse(429, { message: 'Agent review limit reached' });
+            await expect(client.reviewAgent({ patch: 'x' })).rejects.toThrow('Agent review limit reached');
+        });
+
+        it('attaches status to the thrown error', async () => {
+            mockErrorResponse(401, { message: 'Unauthorized' });
+
+            try {
+                await client.reviewAgent({ patch: 'x' });
+                expect.fail('should have thrown');
+            } catch (err: any) {
+                expect(err.status).toBe(401);
+            }
+        });
+    });
+
     describe('createApiKey', () => {
         it('sends POST to /api/keys with correct headers and body', async () => {
             mockOkResponse({ id: 1, name: 'ci', keyPrefix: 'optk', key: 'optk_abc', createdAt: '2026-01-01' });
