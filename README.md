@@ -139,8 +139,19 @@ Once configured, just ask your AI assistant naturally:
 | Tool | Description |
 |------|-------------|
 | `review_local_changes` | Review uncommitted local changes (git diff HEAD) |
+| `review_agent` | Agent-mode review of uncommitted local changes — returns structured findings (severity, category, confidence, stable ids) plus a signal-vs-noise rubric for the host to classify |
 | `review_branch` | Review changes against a target branch (auto-detects or specify) |
 | `review_diff_file` | Review an arbitrary diff/patch file |
+
+#### Agent review mode (`review_agent`)
+
+`review_agent` is built for a coding-agent host that already holds the working copy and will act on the results. Unlike the prose-style `review_local_changes`, it returns **structured findings** in a single synchronous pass, with no server-side tools — the changed files are front-loaded with the diff so the reviewer has everything it needs.
+
+Each finding carries a stable `id`, `severity` (`blocker` / `warning` / `nit`), `category`, `file:line`, `message`, an optional `suggestedFix`, and a `confidence` score (1-10). The stable `id` is a hash of the file, category, and normalized message (not line numbers), so it stays the same across re-runs and lets the host say "same finding as last round."
+
+The tool's output ends with a **signal-vs-noise self-assessment** step: because the MCP cannot itself judge whether a finding is real (that needs the working copy), it renders a structural severity breakdown, lists every finding, and hands the host the classification rubric. The host opens the cited lines, labels each finding as a real issue, a valid suggestion, or noise, then prints the signal-to-noise bar (industry trust threshold is roughly 5:1).
+
+If the response includes `missingContext` — files the reviewer needed but was not given — the output lists them with a note to read those files and re-run `review_agent` (each re-run spends one review from your daily quota).
 
 ### Auth & status
 
