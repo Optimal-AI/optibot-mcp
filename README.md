@@ -151,7 +151,26 @@ Each finding carries a stable `id`, `severity` (`blocker` / `warning` / `nit`), 
 
 The tool's output ends with a **signal-vs-noise self-assessment** step: because the MCP cannot itself judge whether a finding is real (that needs the working copy), it renders a structural severity breakdown, lists every finding, and hands the host the classification rubric. The host opens the cited lines, labels each finding as a real issue, a valid suggestion, or noise, then prints the signal-to-noise bar (industry trust threshold is roughly 5:1).
 
-If the response includes `missingContext` — files the reviewer needed but was not given — the output lists them with a note to read those files and re-run `review_agent` (each re-run spends one review from your daily quota).
+##### Pre-attaching extra context
+
+`review_agent` accepts two optional inputs so you can hand the reviewer context that is not part of the diff:
+
+| Input | Type | Purpose |
+|-------|------|---------|
+| `relatedPaths` | `string[]` | Repo-relative paths of extra files the reviewer should read — callers, interfaces, or tests that the changed code depends on but that are not themselves changed. The tool reads each from disk and sends it as related context. Files that cannot be read (missing, outside the repo, potentially sensitive, or binary) are skipped, and a `Context warnings:` block is prepended to the output naming each one. |
+| `diagnosticsPath` | `string` | Repo-relative path to a local `tsc`/`eslint`/LSP output file. The tool reads it as plain text and passes it to the reviewer as local diagnostics. If it cannot be read, the tool warns and continues rather than failing. |
+
+Both are optional; with neither, the tool behaves exactly as before.
+
+##### Missing context is host-driven
+
+`review_agent` is a **thin, single-shot primitive** — it never loops to fetch more context on its own. When the response includes `missingContext` (files the reviewer needed but was not given), the output lists those paths and prints a call-to-action telling you to **re-call `review_agent` with those paths in `relatedPaths`**, for example:
+
+```
+To let the reviewer see these, call `review_agent` again with `relatedPaths: ["src/db.ts", "src/user.ts"]`. Each re-run spends one review from your quota.
+```
+
+The host (which has an LLM) drives that resubmit — it reads the listed files and re-invokes the tool with `relatedPaths` — so the resubmit decision stays with the host, not buried inside the tool. Each re-run spends one review from your daily quota.
 
 ### Auth & status
 
