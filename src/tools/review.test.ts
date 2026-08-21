@@ -10,6 +10,8 @@ const mockGetDiffBranch = vi.fn();
 const mockReadDiffFile = vi.fn();
 const mockGetChangedFiles = vi.fn();
 const mockGetFileContents = vi.fn();
+const mockGetRelatedFileContents = vi.fn();
+const mockReadDiagnosticsFile = vi.fn();
 const mockDetectBaseBranch = vi.fn();
 const mockCheckMergeConflicts = vi.fn();
 const mockFormatReview = vi.fn();
@@ -32,6 +34,8 @@ vi.mock('../lib/git.js', () => ({
     readDiffFile: (...args: any[]) => mockReadDiffFile(...args),
     getChangedFiles: (...args: any[]) => mockGetChangedFiles(...args),
     getFileContents: (...args: any[]) => mockGetFileContents(...args),
+    getRelatedFileContents: (...args: any[]) => mockGetRelatedFileContents(...args),
+    readDiagnosticsFile: (...args: any[]) => mockReadDiagnosticsFile(...args),
     detectBaseBranch: (...args: any[]) => mockDetectBaseBranch(...args),
     checkMergeConflicts: (...args: any[]) => mockCheckMergeConflicts(...args),
 }));
@@ -228,6 +232,96 @@ describe('review tools', () => {
 
             expect(result.isError).toBe(true);
             expect(result.content[0].text).toBe('API error');
+        });
+
+        it('reads relatedPaths and passes them as relatedFiles to the API', async () => {
+            mockReadConfig.mockResolvedValue({ apiKey: 'key' });
+            mockGetRepoRoot.mockResolvedValue('/repo');
+            mockGetRepoName.mockResolvedValue('my-repo');
+            mockGetDiffHead.mockResolvedValue('diff content');
+            mockGetChangedFiles.mockResolvedValue([{ relativePath: 'a.ts', status: 'M' }]);
+            mockGetFileContents.mockResolvedValue({ 'a.ts': 'contents' });
+            mockGetRelatedFileContents.mockResolvedValue({
+                contents: { 'src/caller.ts': 'caller source' },
+                warnings: [],
+            });
+            mockApiReviewAgent.mockResolvedValue({ status: 'needs_changes', findings: [] });
+            mockFormatAgentReview.mockReturnValue('Agent review output');
+
+            const handler = registeredTools.get('review_agent')!;
+            const result = await handler({ relatedPaths: ['src/caller.ts'] }, mockExtra);
+
+            expect(mockGetRelatedFileContents).toHaveBeenCalledWith(['src/caller.ts'], '/repo');
+            expect(mockApiReviewAgent).toHaveBeenCalledWith(
+                expect.objectContaining({ relatedFiles: { 'src/caller.ts': 'caller source' } })
+            );
+            expect(result.content[0].text).toBe('Agent review output');
+        });
+
+        it('prepends context warnings when a related file cannot be read', async () => {
+            mockReadConfig.mockResolvedValue({ apiKey: 'key' });
+            mockGetRepoRoot.mockResolvedValue('/repo');
+            mockGetRepoName.mockResolvedValue('my-repo');
+            mockGetDiffHead.mockResolvedValue('diff content');
+            mockGetChangedFiles.mockResolvedValue([]);
+            mockGetFileContents.mockResolvedValue({});
+            mockGetRelatedFileContents.mockResolvedValue({
+                contents: {},
+                warnings: ['Could not read related file: src/missing.ts'],
+            });
+            mockApiReviewAgent.mockResolvedValue({ status: 'looks_good', findings: [] });
+            mockFormatAgentReview.mockReturnValue('Agent review output');
+
+            const handler = registeredTools.get('review_agent')!;
+            const result = await handler({ relatedPaths: ['src/missing.ts'] }, mockExtra);
+
+            expect(result.content[0].text).toContain('Context warnings:');
+            expect(result.content[0].text).toContain('Could not read related file: src/missing.ts');
+            // No readable related files → relatedFiles is omitted entirely.
+            expect(mockApiReviewAgent).toHaveBeenCalledWith(
+                expect.not.objectContaining({ relatedFiles: expect.anything() })
+            );
+        });
+
+        it('reads diagnosticsPath and passes it as localDiagnostics', async () => {
+            mockReadConfig.mockResolvedValue({ apiKey: 'key' });
+            mockGetRepoRoot.mockResolvedValue('/repo');
+            mockGetRepoName.mockResolvedValue('my-repo');
+            mockGetDiffHead.mockResolvedValue('diff content');
+            mockGetChangedFiles.mockResolvedValue([]);
+            mockGetFileContents.mockResolvedValue({});
+            mockReadDiagnosticsFile.mockResolvedValue('tsc: 2 errors');
+            mockApiReviewAgent.mockResolvedValue({ status: 'needs_changes', findings: [] });
+            mockFormatAgentReview.mockReturnValue('Agent review output');
+
+            const handler = registeredTools.get('review_agent')!;
+            await handler({ diagnosticsPath: 'build/tsc.log' }, mockExtra);
+
+            expect(mockReadDiagnosticsFile).toHaveBeenCalledWith('build/tsc.log', '/repo');
+            expect(mockApiReviewAgent).toHaveBeenCalledWith(
+                expect.objectContaining({ localDiagnostics: 'tsc: 2 errors' })
+            );
+        });
+
+        it('warns instead of failing when the diagnostics file cannot be read', async () => {
+            mockReadConfig.mockResolvedValue({ apiKey: 'key' });
+            mockGetRepoRoot.mockResolvedValue('/repo');
+            mockGetRepoName.mockResolvedValue('my-repo');
+            mockGetDiffHead.mockResolvedValue('diff content');
+            mockGetChangedFiles.mockResolvedValue([]);
+            mockGetFileContents.mockResolvedValue({});
+            mockReadDiagnosticsFile.mockRejectedValue(new Error('ENOENT'));
+            mockApiReviewAgent.mockResolvedValue({ status: 'looks_good', findings: [] });
+            mockFormatAgentReview.mockReturnValue('Agent review output');
+
+            const handler = registeredTools.get('review_agent')!;
+            const result = await handler({ diagnosticsPath: 'missing.log' }, mockExtra);
+
+            expect(result.isError).toBeUndefined();
+            expect(result.content[0].text).toContain('Could not read diagnostics file "missing.log"');
+            expect(mockApiReviewAgent).toHaveBeenCalledWith(
+                expect.not.objectContaining({ localDiagnostics: expect.anything() })
+            );
         });
     });
 
