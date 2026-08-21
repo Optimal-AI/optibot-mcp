@@ -226,14 +226,21 @@ export function formatAgentReview(response: AgentReviewResponse): string {
     }
 
     if (response.missingContext && response.missingContext.length > 0) {
+        const missing = response.missingContext.map(f => sanitizeServerText(f));
         lines.push('');
-        lines.push('### Missing context');
+        lines.push('### Missing context — re-run for a sharper review');
         lines.push('');
-        lines.push('The reviewer needed these files but was not given them. Read them and re-run `review_agent` with them included as related context for a sharper review (each re-run spends one review from your quota):');
+        lines.push('The reviewer needed these files but was not given them:');
         lines.push('');
-        for (const file of response.missingContext) {
-            lines.push(`- \`${sanitizeServerText(file)}\``);
+        for (const file of missing) {
+            lines.push(`- \`${file}\``);
         }
+        lines.push('');
+        // Host-driven resubmit: the tool is a thin single-shot primitive and
+        // does NOT loop on its own. The host re-calls `review_agent`, passing
+        // the missing files back through the `relatedPaths` input.
+        const pathsLiteral = missing.map(f => JSON.stringify(f)).join(', ');
+        lines.push(`To let the reviewer see these, call \`review_agent\` again with \`relatedPaths: [${pathsLiteral}]\`. Each re-run spends one review from your quota.`);
     }
 
     if (response.reviewCount) {

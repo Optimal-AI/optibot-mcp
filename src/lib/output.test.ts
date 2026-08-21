@@ -393,6 +393,12 @@ describe('formatAgentReview', () => {
         expect(out).toContain('re-run');
     });
 
+    it('renders a host-driven resubmit call-to-action with a relatedPaths literal', () => {
+        const out = formatAgentReview(makeResponse({ missingContext: ['src/db.ts', 'src/user.ts'] }));
+        expect(out).toContain('call `review_agent` again with');
+        expect(out).toContain('relatedPaths: ["src/db.ts", "src/user.ts"]');
+    });
+
     it('renders the review count footer', () => {
         const out = formatAgentReview(makeResponse());
         expect(out).toContain('Reviews used: 1/50 (49 remaining)');
