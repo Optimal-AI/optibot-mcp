@@ -214,6 +214,90 @@ export async function getFileContents(
     return contents;
 }
 
+/**
+ * Read caller-specified related-context files (callers, interfaces, tests) that
+ * are NOT part of the diff, so the agent reviewer can see them. Paths are
+ * repo-relative. Returns the readable file contents keyed by their
+ * repo-relative path, plus a warning line for every path that was skipped
+ * (missing, unreadable, sensitive, binary, outside the repo, or over the
+ * upload budget) so the tool can surface it to the host.
+ */
+export async function getRelatedFileContents(
+    relatedPaths: string[],
+    repoRoot: string
+): Promise<{ contents: Record<string, string>; warnings: string[] }> {
+    const contents: Record<string, string> = {};
+    const warnings: string[] = [];
+    let totalBytes = 0;
+
+    for (const rawPath of relatedPaths) {
+        const relativePath = rawPath.trim();
+        if (!relativePath) continue;
+
+        const absolutePath = path.resolve(repoRoot, relativePath);
+
+        // Prevent escaping the repo root via absolute paths or `..` traversal.
+        if (absolutePath !== repoRoot && !absolutePath.startsWith(repoRoot + path.sep)) {
+            warnings.push(`Skipped related file outside the repository: ${relativePath}`);
+            continue;
+        }
+
+        if (isSensitiveFile(relativePath)) {
+            console.error(`[security] Skipping potentially sensitive related file: ${relativePath}`);
+            warnings.push(`Skipped potentially sensitive related file: ${relativePath}`);
+            continue;
+        }
+
+        // Reject known-binary extensions before reading, so we never pull a
+        // large binary file into memory.
+        if (isBinaryExtension(relativePath)) {
+            warnings.push(`Skipped binary related file: ${relativePath}`);
+            continue;
+        }
+
+        let content: string;
+        try {
+            content = await fs.readFile(absolutePath, 'utf-8');
+        } catch {
+            warnings.push(`Could not read related file: ${relativePath}`);
+            continue;
+        }
+
+        // Content-level binary check for files without a telltale extension:
+        // reject content that carries a NUL byte.
+        if (content.includes('\u0000')) {
+            warnings.push(`Skipped binary related file: ${relativePath}`);
+            continue;
+        }
+
+        const size = Buffer.byteLength(content, 'utf-8');
+        if (totalBytes + size > MAX_UPLOAD_BYTES) {
+            warnings.push(`Skipped related file (upload budget exceeded): ${relativePath}`);
+            continue;
+        }
+
+        contents[relativePath] = content;
+        totalBytes += size;
+    }
+
+    return { contents, warnings };
+}
+
+/**
+ * Read a local diagnostics file (e.g. captured `tsc` or `eslint` output) as
+ * plain text. The path is resolved relative to the repo root and must stay
+ * within it — the same containment rule `readDiffFile` enforces.
+ */
+export async function readDiagnosticsFile(filePath: string, repoRoot: string): Promise<string> {
+    const absolutePath = path.resolve(repoRoot, filePath);
+
+    if (absolutePath !== repoRoot && !absolutePath.startsWith(repoRoot + path.sep)) {
+        throw new Error(`Diagnostics file must be within the repository. Got: ${filePath}`);
+    }
+
+    return fs.readFile(absolutePath, 'utf-8');
+}
+
 export async function getRemoteBranches(repoRoot: string): Promise<string[]> {
     try {
         const { stdout } = await execFile('git', ['branch', '-r'], { cwd: repoRoot });

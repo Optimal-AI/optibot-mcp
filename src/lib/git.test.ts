@@ -19,6 +19,8 @@ import {
     readDiffFile,
     getChangedFiles,
     getFileContents,
+    getRelatedFileContents,
+    readDiagnosticsFile,
     getRemoteBranches,
     detectBaseBranch,
     checkMergeConflicts,
@@ -398,6 +400,124 @@ describe('getFileContents', () => {
             '/repo'
         );
         expect(result).toEqual({});
+    });
+});
+
+describe('getRelatedFileContents', () => {
+    beforeEach(() => {
+        vi.mocked(fs.readFile).mockReset();
+    });
+
+    it('reads each related path and keys contents by repo-relative path', async () => {
+        vi.mocked(fs.readFile).mockImplementation(async (p: any) => {
+            if (String(p).endsWith('caller.ts')) return 'caller source';
+            if (String(p).endsWith('iface.ts')) return 'interface source';
+            throw new Error('unexpected');
+        });
+
+        const { contents, warnings } = await getRelatedFileContents(
+            ['src/caller.ts', 'src/iface.ts'],
+            '/repo'
+        );
+
+        expect(contents).toEqual({
+            'src/caller.ts': 'caller source',
+            'src/iface.ts': 'interface source',
+        });
+        expect(warnings).toEqual([]);
+    });
+
+    it('warns and skips unreadable paths but keeps the readable ones', async () => {
+        vi.mocked(fs.readFile).mockImplementation(async (p: any) => {
+            if (String(p).endsWith('present.ts')) return 'ok';
+            throw new Error('ENOENT');
+        });
+
+        const { contents, warnings } = await getRelatedFileContents(
+            ['src/present.ts', 'src/missing.ts'],
+            '/repo'
+        );
+
+        expect(contents).toEqual({ 'src/present.ts': 'ok' });
+        expect(warnings).toHaveLength(1);
+        expect(warnings[0]).toContain('Could not read related file: src/missing.ts');
+    });
+
+    it('warns and skips paths that escape the repo root', async () => {
+        const { contents, warnings } = await getRelatedFileContents(
+            ['../outside.ts'],
+            '/repo'
+        );
+
+        expect(contents).toEqual({});
+        expect(warnings[0]).toContain('outside the repository');
+        expect(fs.readFile).not.toHaveBeenCalled();
+    });
+
+    it('warns and skips potentially sensitive related files', async () => {
+        const { contents, warnings } = await getRelatedFileContents(
+            ['.env'],
+            '/repo'
+        );
+
+        expect(contents).toEqual({});
+        expect(warnings[0]).toContain('sensitive');
+        expect(fs.readFile).not.toHaveBeenCalled();
+    });
+
+    it('warns and skips binary related files (by extension)', async () => {
+        const { contents, warnings } = await getRelatedFileContents(
+            ['assets/logo.png'],
+            '/repo'
+        );
+
+        expect(contents).toEqual({});
+        expect(warnings[0]).toContain('binary');
+        expect(fs.readFile).not.toHaveBeenCalled();
+    });
+
+    it('warns and skips related files whose content carries a NUL byte', async () => {
+        vi.mocked(fs.readFile).mockResolvedValue('text\u0000more');
+
+        const { contents, warnings } = await getRelatedFileContents(
+            ['src/weird.ts'],
+            '/repo'
+        );
+
+        expect(contents).toEqual({});
+        expect(warnings[0]).toContain('binary');
+    });
+
+    it('ignores blank path entries', async () => {
+        const { contents, warnings } = await getRelatedFileContents(
+            ['   ', ''],
+            '/repo'
+        );
+
+        expect(contents).toEqual({});
+        expect(warnings).toEqual([]);
+        expect(fs.readFile).not.toHaveBeenCalled();
+    });
+});
+
+describe('readDiagnosticsFile', () => {
+    beforeEach(() => {
+        vi.mocked(fs.readFile).mockReset();
+    });
+
+    it('reads a diagnostics file within the repo as plain text', async () => {
+        vi.mocked(fs.readFile).mockResolvedValue('tsc: 3 errors');
+
+        const text = await readDiagnosticsFile('build/tsc.log', '/repo');
+        expect(text).toBe('tsc: 3 errors');
+        expect(fs.readFile).toHaveBeenCalledWith(path.resolve('/repo', 'build/tsc.log'), 'utf-8');
+    });
+
+    it('rejects a diagnostics path that escapes the repo root', async () => {
+        await expect(readDiagnosticsFile('../../etc/passwd', '/repo')).rejects.toThrow(
+            'Diagnostics file must be within the repository'
+        );
+        expect(fs.readFile).not.toHaveBeenCalled();
     });
 });
 
