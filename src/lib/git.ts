@@ -339,11 +339,33 @@ export async function getRelatedFileContents(
  * plain text. The path is resolved relative to the repo root and must stay
  * within it — the same containment rule `readDiffFile` enforces.
  */
+/**
+ * Reads a caller-supplied diagnostics file (local `tsc`/`eslint` output) whose
+ * contents are sent to the reviewer.
+ *
+ * This path is supplied the same way a related path is, so it gets the same
+ * discipline: resolved through realpath so a symlink cannot point out of the
+ * repository, refused when it names a sensitive file, and capped in size.
+ * Without that, a `diagnosticsPath` of `.env` or `id_rsa` would be read and
+ * uploaded as plain text.
+ */
 export async function readDiagnosticsFile(filePath: string, repoRoot: string): Promise<string> {
-    const absolutePath = path.resolve(repoRoot, filePath);
+    const absolutePath = await resolveRelatedPath(filePath, repoRoot);
+    if (!absolutePath) {
+        throw new Error(`Diagnostics file must be a readable file within the repository. Got: ${filePath}`);
+    }
 
-    if (absolutePath !== repoRoot && !absolutePath.startsWith(repoRoot + path.sep)) {
-        throw new Error(`Diagnostics file must be within the repository. Got: ${filePath}`);
+    if (isSensitiveFile(filePath)) {
+        throw new Error(`Refusing to read a potentially sensitive diagnostics file: ${filePath}`);
+    }
+
+    if (isBinaryExtension(filePath)) {
+        throw new Error(`Diagnostics file looks binary, expected text output: ${filePath}`);
+    }
+
+    const stat = await fs.stat(absolutePath);
+    if (stat.size > MAX_UPLOAD_BYTES) {
+        throw new Error(`Diagnostics file is too large to send (${stat.size} bytes, limit ${MAX_UPLOAD_BYTES}): ${filePath}`);
     }
 
     return fs.readFile(absolutePath, 'utf-8');

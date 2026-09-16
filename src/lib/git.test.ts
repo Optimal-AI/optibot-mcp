@@ -531,6 +531,8 @@ describe('getRelatedFileContents', () => {
 describe('readDiagnosticsFile', () => {
     beforeEach(() => {
         vi.mocked(fs.readFile).mockReset();
+        vi.mocked(fs.realpath).mockImplementation((async (p: unknown) => path.resolve(String(p))) as never);
+        vi.mocked(fs.stat).mockResolvedValue({ size: 1024 } as never);
     });
 
     it('reads a diagnostics file within the repo as plain text', async () => {
@@ -543,8 +545,41 @@ describe('readDiagnosticsFile', () => {
 
     it('rejects a diagnostics path that escapes the repo root', async () => {
         await expect(readDiagnosticsFile('../../etc/passwd', '/repo')).rejects.toThrow(
-            'Diagnostics file must be within the repository'
+            'must be a readable file within the repository'
         );
+        expect(fs.readFile).not.toHaveBeenCalled();
+    });
+
+    it('rejects a path carrying a NUL, which would truncate in the read', async () => {
+        await expect(readDiagnosticsFile('valid.log\u0000../../etc/passwd', '/repo')).rejects.toThrow(
+            'must be a readable file within the repository'
+        );
+        expect(fs.readFile).not.toHaveBeenCalled();
+    });
+
+    it('refuses a symlink inside the repo whose target escapes it', async () => {
+        vi.mocked(fs.realpath).mockImplementation((async (p: unknown) =>
+            String(p).endsWith('tsc.log') ? '/Users/someone/.ssh/id_rsa' : path.resolve(String(p))) as never);
+
+        await expect(readDiagnosticsFile('build/tsc.log', '/repo')).rejects.toThrow(
+            'must be a readable file within the repository'
+        );
+        expect(fs.readFile).not.toHaveBeenCalled();
+    });
+
+    it('refuses a sensitive file, which would otherwise be uploaded as text', async () => {
+        await expect(readDiagnosticsFile('.env', '/repo')).rejects.toThrow('potentially sensitive');
+        expect(fs.readFile).not.toHaveBeenCalled();
+    });
+
+    it('refuses a binary file', async () => {
+        await expect(readDiagnosticsFile('build/output.png', '/repo')).rejects.toThrow('looks binary');
+        expect(fs.readFile).not.toHaveBeenCalled();
+    });
+
+    it('refuses a file larger than the upload cap', async () => {
+        vi.mocked(fs.stat).mockResolvedValue({ size: 26 * 1024 * 1024 } as never);
+        await expect(readDiagnosticsFile('build/tsc.log', '/repo')).rejects.toThrow('too large to send');
         expect(fs.readFile).not.toHaveBeenCalled();
     });
 });
