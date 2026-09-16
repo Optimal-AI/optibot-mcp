@@ -74,6 +74,7 @@ vi.mock('../lib/output.js', async (importOriginal) => {
         formatError: (...args: any[]) => mockFormatError(...args),
         hasReviewQuota: actual.hasReviewQuota,
         sanitizeServerText: actual.sanitizeServerText,
+        sanitizeAgentReviewResponse: actual.sanitizeAgentReviewResponse,
     };
 });
 
@@ -263,6 +264,39 @@ describe('review tools', () => {
                 findings: [expect.objectContaining({ id: 'AF-1' })],
             });
             expect(result.content[0].text).toBe('rendered');
+        });
+
+        it('sanitizes the structured payload, not only the markdown', async () => {
+            const ESC = String.fromCharCode(27);
+            mockReadConfig.mockResolvedValue({ apiKey: 'key' });
+            mockGetRepoRoot.mockResolvedValue('/repo');
+            mockGetRepoName.mockResolvedValue('my-repo');
+            mockGetDiffHead.mockResolvedValue('diff content');
+            mockGetChangedFiles.mockResolvedValue([]);
+            mockGetFileContents.mockResolvedValue({});
+            mockApiSubmitAgentReview.mockResolvedValue({
+                kind: 'completed',
+                review: {
+                    status: 'needs_changes',
+                    reviewPass: false,
+                    summary: `sum${ESC}[2Jx`,
+                    findings: [{
+                        id: 'AF-1', file: 'a.ts', startLine: 1, endLine: 1, inPatch: true,
+                        severity: 'blocker', category: 'bug',
+                        message: `${ESC}[2Jwiped`, confidence: 9,
+                        suggestedFix: `${ESC}]52;c;cGF5bG9hZA==fix`,
+                    }],
+                },
+            });
+            mockFormatAgentReview.mockReturnValue('rendered');
+
+            const result: any = await registeredTools.get('review_agent')!(mockExtra);
+
+            const finding = result.structuredContent.findings[0];
+            expect(finding.message).not.toContain(ESC);
+            expect(finding.suggestedFix).not.toContain(ESC);
+            expect(result.structuredContent.summary).not.toContain(ESC);
+            expect(finding.message).toBe('wiped');
         });
 
         it('keeps the unlimited quota sentinel out of the structured data', async () => {

@@ -21,7 +21,7 @@ export interface ReviewResponse {
 }
 
 // ------ Agent review mode ------
-// Ported from optibot-be/src/types/agentReview.ts. Agent mode returns
+// Mirrors the Optibot API contract for agent mode, which returns
 // structured findings as native JSON (NOT base64-encoded, unlike full mode).
 
 export type FindingSeverity = 'blocker' | 'warning' | 'nit';
@@ -83,9 +83,8 @@ export interface AgentReviewResponse {
     reviewCount?: AgentReviewCountInfo;
     isOptibotInstalled?: boolean;
     /**
-     * `model`/`provider` name the model that produced the findings. The server
-     * always sends both — the default model in production, or the one a dev
-     * backend ran for a model override.
+     * `model`/`provider` name the model that produced the findings. The
+     * service always sends both.
      */
     meta?: { mode: 'agent'; durationMs: number; model?: string; provider?: string };
 }

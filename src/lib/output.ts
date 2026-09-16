@@ -61,9 +61,9 @@ export function parseFileComments(fileComments: string[]): ParsedFileComment[] {
 /**
  * True when the service reported a real daily ceiling.
  *
- * With no daily limit configured — the default for agent reviews, and the
- * current state of production — the backend answers with
- * Number.MAX_SAFE_INTEGER for `limit` and `remaining` and 0 for `current`,
+ * When no daily cap is configured — the default for agent reviews — the
+ * service answers with Number.MAX_SAFE_INTEGER for `limit` and `remaining`
+ * and 0 for `current`,
  * because it short-circuits before counting anything. Rendering that verbatim
  * produces "Reviews used: 0/9007199254740991", so the counter is omitted
  * instead: there is no quota to report.
@@ -81,6 +81,49 @@ function inlineCode(text: string): string {
     const fence = '`'.repeat(longestRun + 1);
     const padding = text.startsWith('`') || text.endsWith('`') ? ' ' : '';
     return `${fence}${padding}${text}${padding}${fence}`;
+}
+
+/**
+ * Returns the review with every backend-supplied string stripped of ANSI
+ * escapes and control characters.
+ *
+ * The rendered markdown sanitizes each field as it interpolates it, but the
+ * structured payload is handed to the host as data, and this repo's rule is
+ * that any string the backend returns is sanitized before it enters a tool
+ * result — both channels are the tool result. Without this, a reviewer that
+ * quotes attacker-authored source back in a finding message reaches a host
+ * with cursor, screen-clearing, and OSC 52 clipboard sequences intact.
+ */
+export function sanitizeAgentReviewResponse(response: AgentReviewResponse): AgentReviewResponse {
+    const clean = (value: string | undefined): string | undefined =>
+        typeof value === 'string' ? sanitizeServerText(value) : value;
+
+    return {
+        ...response,
+        summary: sanitizeServerText(response.summary ?? ''),
+        findings: (response.findings ?? []).map((finding) => ({
+            ...finding,
+            id: sanitizeServerText(String(finding.id ?? '')),
+            file: sanitizeServerText(String(finding.file ?? '')),
+            category: sanitizeServerText(String(finding.category ?? '')) as AgentReviewFinding['category'],
+            message: sanitizeServerText(String(finding.message ?? '')),
+            ...(finding.suggestedFix !== undefined
+                ? { suggestedFix: clean(finding.suggestedFix) }
+                : {}),
+        })),
+        ...(response.missingContext
+            ? { missingContext: response.missingContext.map((p) => sanitizeServerText(String(p))) }
+            : {}),
+        ...(response.meta
+            ? {
+                meta: {
+                    ...response.meta,
+                    ...(response.meta.model !== undefined ? { model: clean(response.meta.model) } : {}),
+                    ...(response.meta.provider !== undefined ? { provider: clean(response.meta.provider) } : {}),
+                },
+            }
+            : {}),
+    };
 }
 
 export function hasReviewQuota(

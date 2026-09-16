@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { sanitizeServerText, parseFileComments, formatReview, formatAgentReview, formatResetTime, formatError, hasReviewQuota } from './output.js';
+import { sanitizeServerText, parseFileComments, formatReview, formatAgentReview, formatResetTime, formatError, hasReviewQuota, sanitizeAgentReviewResponse } from './output.js';
 import { AgentReviewResponse, AgentReviewFinding } from '../types.js';
 
 describe('sanitizeServerText', () => {
@@ -313,6 +313,69 @@ describe('missingContext rendering', () => {
         // backtick in a server-supplied path would otherwise close the span.
         const out = withMissing(['we`ird.ts']);
         expect(out).toContain('``we`ird.ts``');
+    });
+});
+
+describe('sanitizeAgentReviewResponse', () => {
+    const ESC = String.fromCharCode(27);
+    const BEL = String.fromCharCode(7);
+    // Screen-clear plus an OSC 52 clipboard write — what a reviewer could quote
+    // back from attacker-authored source in the repository under review.
+    const evil = `${ESC}[2J${ESC}]52;c;cGF5bG9hZA==${BEL}text`;
+
+    const response = {
+        status: 'needs_changes',
+        reviewPass: false,
+        summary: `summary${evil}`,
+        missingContext: [`ctx${evil}.ts`],
+        meta: { mode: 'agent', durationMs: 1, model: `model${evil}`, provider: `prov${evil}` },
+        findings: [{
+            id: `AF${evil}`,
+            file: `a${evil}.ts`,
+            startLine: 1,
+            endLine: 2,
+            inPatch: true,
+            severity: 'blocker',
+            category: 'bug',
+            message: evil,
+            confidence: 9,
+            suggestedFix: `fix${evil}`,
+        }],
+    } as never;
+
+    it('strips escapes from every backend-supplied string', () => {
+        const clean = sanitizeAgentReviewResponse(response);
+        const f = clean.findings[0];
+        const values = [
+            clean.summary,
+            clean.missingContext![0],
+            clean.meta!.model!,
+            clean.meta!.provider!,
+            f.id, f.file, f.message, f.suggestedFix!,
+        ];
+        for (const value of values) {
+            expect(value).not.toContain(ESC);
+            expect(value).not.toContain(BEL);
+        }
+    });
+
+    it('keeps the readable text and the non-string fields', () => {
+        const clean = sanitizeAgentReviewResponse(response);
+        const f = clean.findings[0];
+        expect(f.message).toBe('text');
+        expect(clean.summary).toBe('summarytext');
+        expect(f.startLine).toBe(1);
+        expect(f.confidence).toBe(9);
+        expect(clean.reviewPass).toBe(false);
+    });
+
+    it('leaves an absent optional field absent rather than inventing it', () => {
+        const clean = sanitizeAgentReviewResponse({
+            status: 'looks_good', reviewPass: true, summary: 's', findings: [],
+        } as never);
+        expect(clean.missingContext).toBeUndefined();
+        expect(clean.meta).toBeUndefined();
+        expect('suggestedFix' in (clean.findings[0] ?? {})).toBe(false);
     });
 });
 

@@ -216,6 +216,16 @@ export async function getFileContents(
         if (await isBinaryFile(absolutePath)) continue;
 
         try {
+            // Size from the directory entry first, like the related-file path:
+            // a changed file that cannot fit the budget should not be pulled
+            // into memory just to be discarded. A single huge text file in the
+            // working tree would otherwise spike this long-lived server's
+            // memory, taking down every other tool call in the host session.
+            const stat = await fs.stat(absolutePath);
+            if (!budget.canFit(stat.size)) {
+                truncated += 1;
+                continue;
+            }
             const content = await fs.readFile(absolutePath, 'utf-8');
             const size = Buffer.byteLength(content, 'utf-8');
             if (!budget.canFit(size)) {

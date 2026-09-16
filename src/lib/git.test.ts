@@ -350,6 +350,12 @@ describe('getChangedFiles', () => {
 });
 
 describe('getFileContents', () => {
+    beforeEach(() => {
+        // The budget is checked from the directory entry before the read, so
+        // stat has to answer for every candidate file.
+        vi.mocked(fs.stat).mockResolvedValue({ size: 1024 } as never);
+    });
+
     it('reads contents for modified files', async () => {
         const mockHandle = {
             read: vi.fn(async (buf: Buffer) => {

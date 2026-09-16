@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { readConfig } from '../lib/config.js';
 import * as git from '../lib/git.js';
 import { ApiClient } from '../lib/api.js';
-import { formatReview, formatAgentReview, formatError, hasReviewQuota, sanitizeServerText } from '../lib/output.js';
+import { formatReview, formatAgentReview, formatError, hasReviewQuota, sanitizeServerText, sanitizeAgentReviewResponse } from '../lib/output.js';
 import { ReviewProgressService, ReviewProgressEvent } from '../lib/reviewProgress.js';
 import { safeSendLog, ToolExtraLike } from '../lib/notify.js';
 import { waitForAgentReviewResult } from '../lib/agentReviewPolling.js';
@@ -291,12 +291,15 @@ export function registerReviewTools(server: McpServer): void {
                 // sentinel, matching what the rendered text does. Otherwise a
                 // host reading the structured data would print
                 // "0/9007199254740991" that the markdown deliberately omits.
-                const { reviewCount, ...rest } = response;
+                // Sanitized before it leaves, exactly as the markdown is: the
+                // structured payload is part of the same tool result, and it is
+                // the channel a coding-agent host actually consumes.
+                const { reviewCount, ...rest } = sanitizeAgentReviewResponse(response);
                 return {
                     content: [{ type: 'text' as const, text }],
                     structuredContent: {
                         ...rest,
-                        findings: response.findings ?? [],
+                        findings: rest.findings ?? [],
                         ...(hasReviewQuota(reviewCount) ? { reviewCount } : {}),
                         ...(warnings.length > 0 ? { warnings } : {}),
                     },
