@@ -26,6 +26,7 @@ import {
     checkMergeConflicts,
     assertSafeRefName,
     createUploadBudget,
+    screenReadablePath,
 } from './git.js';
 
 const execMock = vi.mocked(exec);
@@ -352,8 +353,10 @@ describe('getChangedFiles', () => {
 describe('getFileContents', () => {
     beforeEach(() => {
         // The budget is checked from the directory entry before the read, so
-        // stat has to answer for every candidate file.
+        // stat has to answer for every candidate file, and the shared path
+        // gate resolves both the root and the candidate through realpath.
         vi.mocked(fs.stat).mockResolvedValue({ size: 1024 } as never);
+        vi.mocked(fs.realpath).mockImplementation((async (p: unknown) => path.resolve(String(p))) as never);
     });
 
     it('reads contents for modified files', async () => {
@@ -799,5 +802,71 @@ describe('createUploadBudget', () => {
         expect(Object.keys(first.contents)).toEqual(['a.ts']);
         expect(Object.keys(second.contents)).toEqual([]);
         expect(second.warnings.join(' ')).toContain('upload');
+    });
+});
+
+describe('screenReadablePath — the shared gate', () => {
+    beforeEach(() => {
+        vi.mocked(fs.realpath).mockImplementation((async (p: unknown) => path.resolve(String(p))) as never);
+    });
+
+    it('accepts an ordinary repo-relative path', async () => {
+        await expect(screenReadablePath('src/db.ts', '/repo')).resolves.toEqual({
+            ok: true, absolutePath: path.join('/repo', 'src/db.ts'),
+        });
+    });
+
+    it('refuses a path that leaves the repository', async () => {
+        await expect(screenReadablePath('../../.env', '/repo')).resolves.toEqual({ ok: false, reason: 'outside' });
+    });
+
+    it('refuses a sensitive name as requested', async () => {
+        await expect(screenReadablePath('.env', '/repo')).resolves.toEqual({ ok: false, reason: 'sensitive' });
+    });
+
+    it('refuses a symlink whose resolved name is sensitive', async () => {
+        // The whole point of the gate: containment passes, and only the
+        // resolved name gives the link away.
+        vi.mocked(fs.realpath).mockImplementation((async (p: unknown) =>
+            String(p).endsWith('notes.md') ? '/repo/.env' : path.resolve(String(p))) as never);
+        await expect(screenReadablePath('notes.md', '/repo')).resolves.toEqual({ ok: false, reason: 'sensitive' });
+    });
+
+    it('refuses a symlink whose resolved name is binary', async () => {
+        vi.mocked(fs.realpath).mockImplementation((async (p: unknown) =>
+            String(p).endsWith('notes.md') ? '/repo/logo.png' : path.resolve(String(p))) as never);
+        await expect(screenReadablePath('notes.md', '/repo')).resolves.toEqual({ ok: false, reason: 'binary' });
+    });
+});
+
+describe('every reader refuses a symlink to a secret', () => {
+    // One test per reader, because the guard was written into one and missed
+    // in another five times before they shared a gate.
+    beforeEach(() => {
+        vi.mocked(fs.stat).mockResolvedValue({ size: 16 } as never);
+        vi.mocked(fs.readFile).mockResolvedValue('secret content');
+        vi.mocked(fs.realpath).mockImplementation((async (p: unknown) =>
+            String(p).endsWith('notes.md') ? '/repo/.env' : path.resolve(String(p))) as never);
+    });
+
+    it('getFileContents', async () => {
+        mockExecFile('');
+        const contents = await getFileContents(
+            [{ relativePath: 'notes.md', status: 'M' }],
+            '/repo',
+        );
+        expect(contents).toEqual({});
+        expect(fs.readFile).not.toHaveBeenCalled();
+    });
+
+    it('getRelatedFileContents', async () => {
+        const { contents } = await getRelatedFileContents(['notes.md'], '/repo');
+        expect(contents).toEqual({});
+        expect(fs.readFile).not.toHaveBeenCalled();
+    });
+
+    it('readDiagnosticsFile', async () => {
+        await expect(readDiagnosticsFile('notes.md', '/repo')).rejects.toThrow('sensitive');
+        expect(fs.readFile).not.toHaveBeenCalled();
     });
 });

@@ -206,12 +206,18 @@ export async function getFileContents(
     for (const file of changedFiles) {
         if (file.status === 'D') continue;
 
-        if (isSensitiveFile(file.relativePath)) {
-            console.error(`[security] Skipping potentially sensitive file: ${file.relativePath}`);
+        // Through the shared gate: this used to join the path and check the
+        // sensitive-name list against git's own spelling, so a changed file
+        // that was a symlink named `notes.md` pointing at `.env` passed both
+        // and was uploaded, and nothing resolved the link at all.
+        const screened = await screenReadablePath(file.relativePath, repoRoot);
+        if (!screened.ok) {
+            if (screened.reason === 'sensitive') {
+                console.error(`[security] Skipping potentially sensitive file: ${file.relativePath}`);
+            }
             continue;
         }
-
-        const absolutePath = path.join(repoRoot, file.relativePath);
+        const absolutePath = screened.absolutePath;
 
         try {
             // Size from the directory entry first, like the related-file path:
@@ -307,6 +313,44 @@ function isInsideRoot(root: string, target: string): boolean {
  * (missing, unreadable, sensitive, binary, outside the repo, or over the
  * upload budget) so the tool can surface it to the host.
  */
+/**
+ * The single gate every path passes before its contents are uploaded.
+ *
+ * Three functions in this file read a path somebody else named — the changed
+ * files git reports, the related files the caller asks for, and the
+ * diagnostics file — and send what they find to the reviewer. Each guard was
+ * written into one of them and missed in another five separate times: the
+ * realpath containment, the sensitive-name check against the resolved path,
+ * the size check before the read, and the shared upload budget. Routing all
+ * three through one function is what stops the sixth.
+ *
+ * Returns the resolved absolute path, or the reason it was refused.
+ */
+export type PathScreening =
+    | { ok: true; absolutePath: string }
+    | { ok: false; reason: 'outside' | 'sensitive' | 'binary' };
+
+export async function screenReadablePath(
+    requestedPath: string,
+    repoRoot: string,
+): Promise<PathScreening> {
+    const absolutePath = await resolveRelatedPath(requestedPath, repoRoot);
+    if (!absolutePath) return { ok: false, reason: 'outside' };
+
+    // Both names, always: a symlink called `notes.md` pointing at `.env` is
+    // inside the repository, so containment passes and only the resolved name
+    // gives it away.
+    if (isSensitiveFile(requestedPath) || isSensitiveFile(absolutePath)) {
+        return { ok: false, reason: 'sensitive' };
+    }
+
+    if (isBinaryExtension(requestedPath) || isBinaryExtension(absolutePath)) {
+        return { ok: false, reason: 'binary' };
+    }
+
+    return { ok: true, absolutePath };
+}
+
 export async function getRelatedFileContents(
     relatedPaths: string[],
     repoRoot: string,
@@ -319,31 +363,19 @@ export async function getRelatedFileContents(
         const relativePath = rawPath.trim();
         if (!relativePath) continue;
 
-        // realpath-based: an absolute path, a `..` climb, a `~` path, or a
-        // symlink whose target leaves the repository are all refused here.
-        const absolutePath = await resolveRelatedPath(relativePath, repoRoot);
-        if (!absolutePath) {
-            warnings.push(`Skipped related file: not a readable file inside the repository: ${relativePath}`);
+        const screened = await screenReadablePath(relativePath, repoRoot);
+        if (!screened.ok) {
+            if (screened.reason === 'sensitive') {
+                console.error(`[security] Skipping potentially sensitive related file: ${relativePath}`);
+                warnings.push(`Skipped potentially sensitive related file: ${relativePath}`);
+            } else if (screened.reason === 'binary') {
+                warnings.push(`Skipped binary related file: ${relativePath}`);
+            } else {
+                warnings.push(`Skipped related file: not a readable file inside the repository: ${relativePath}`);
+            }
             continue;
         }
-
-        // Both the requested name and the resolved one are checked. Checking
-        // only the requested name let a symlink called `notes.md` that points
-        // at `.env` inside the repository pass every guard and upload the
-        // secret; checking only the resolved one would miss nothing today but
-        // costs nothing to keep.
-        if (isSensitiveFile(relativePath) || isSensitiveFile(absolutePath)) {
-            console.error(`[security] Skipping potentially sensitive related file: ${relativePath}`);
-            warnings.push(`Skipped potentially sensitive related file: ${relativePath}`);
-            continue;
-        }
-
-        // Reject known-binary extensions before reading, so we never pull a
-        // large binary file into memory.
-        if (isBinaryExtension(relativePath) || isBinaryExtension(absolutePath)) {
-            warnings.push(`Skipped binary related file: ${relativePath}`);
-            continue;
-        }
+        const absolutePath = screened.absolutePath;
 
         // Size first, from the directory entry: a file that cannot fit the
         // budget should never be pulled into memory just to be discarded.
@@ -403,20 +435,17 @@ export async function readDiagnosticsFile(
     repoRoot: string,
     budget: UploadBudget = createUploadBudget(),
 ): Promise<string> {
-    const absolutePath = await resolveRelatedPath(filePath, repoRoot);
-    if (!absolutePath) {
+    const screened = await screenReadablePath(filePath, repoRoot);
+    if (!screened.ok) {
+        if (screened.reason === 'sensitive') {
+            throw new Error(`Refusing to read a potentially sensitive diagnostics file: ${filePath}`);
+        }
+        if (screened.reason === 'binary') {
+            throw new Error(`Diagnostics file looks binary, expected text output: ${filePath}`);
+        }
         throw new Error(`Diagnostics file must be a readable file within the repository. Got: ${filePath}`);
     }
-
-    // Checked against the resolved path as well as the requested one: a
-    // symlink named `tsc.log` pointing at a private key would otherwise pass.
-    if (isSensitiveFile(filePath) || isSensitiveFile(absolutePath)) {
-        throw new Error(`Refusing to read a potentially sensitive diagnostics file: ${filePath}`);
-    }
-
-    if (isBinaryExtension(filePath) || isBinaryExtension(absolutePath)) {
-        throw new Error(`Diagnostics file looks binary, expected text output: ${filePath}`);
-    }
+    const absolutePath = screened.absolutePath;
 
     // Spends from the same budget as the changed files and the related files.
     // Diagnostics travel in the same request, so a separate 25 MB allowance
