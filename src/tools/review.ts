@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { readConfig } from '../lib/config.js';
 import * as git from '../lib/git.js';
 import { ApiClient } from '../lib/api.js';
-import { formatReview, formatAgentReview, formatError } from '../lib/output.js';
+import { formatReview, formatAgentReview, formatError, hasReviewQuota } from '../lib/output.js';
 import { ReviewProgressService, ReviewProgressEvent } from '../lib/reviewProgress.js';
 import { safeSendLog, ToolExtraLike } from '../lib/notify.js';
 import { waitForAgentReviewResult } from '../lib/agentReviewPolling.js';
@@ -280,11 +280,17 @@ export function registerReviewTools(server: McpServer): void {
                 // The markdown stays for a host that renders text; the same
                 // review also goes back as data, so a host does not have to
                 // parse headings to find a blocker.
+                // reviewCount is dropped when it is the service's unlimited
+                // sentinel, matching what the rendered text does. Otherwise a
+                // host reading the structured data would print
+                // "0/9007199254740991" that the markdown deliberately omits.
+                const { reviewCount, ...rest } = response;
                 return {
                     content: [{ type: 'text' as const, text }],
                     structuredContent: {
-                        ...response,
+                        ...rest,
                         findings: response.findings ?? [],
+                        ...(hasReviewQuota(reviewCount) ? { reviewCount } : {}),
                         ...(warnings.length > 0 ? { warnings } : {}),
                     },
                 };

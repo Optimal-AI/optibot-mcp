@@ -51,11 +51,18 @@ vi.mock('../lib/api.js', () => ({
     },
 }));
 
-vi.mock('../lib/output.js', () => ({
-    formatReview: (...args: any[]) => mockFormatReview(...args),
-    formatAgentReview: (...args: any[]) => mockFormatAgentReview(...args),
-    formatError: (...args: any[]) => mockFormatError(...args),
-}));
+vi.mock('../lib/output.js', async (importOriginal) => {
+    // The formatters are mocked so the tests can assert on calls, but
+    // hasReviewQuota is a pure predicate the tool uses to decide what goes
+    // into structuredContent; mocking it away would test nothing.
+    const actual = await importOriginal<typeof import('../lib/output.js')>();
+    return {
+        formatReview: (...args: any[]) => mockFormatReview(...args),
+        formatAgentReview: (...args: any[]) => mockFormatAgentReview(...args),
+        formatError: (...args: any[]) => mockFormatError(...args),
+        hasReviewQuota: actual.hasReviewQuota,
+    };
+});
 
 vi.mock('../lib/reviewProgress.js', () => ({
     ReviewProgressService: class {
@@ -243,6 +250,50 @@ describe('review tools', () => {
                 findings: [expect.objectContaining({ id: 'AF-1' })],
             });
             expect(result.content[0].text).toBe('rendered');
+        });
+
+        it('keeps the unlimited quota sentinel out of the structured data', async () => {
+            mockReadConfig.mockResolvedValue({ apiKey: 'key' });
+            mockGetRepoRoot.mockResolvedValue('/repo');
+            mockGetRepoName.mockResolvedValue('my-repo');
+            mockGetDiffHead.mockResolvedValue('diff content');
+            mockGetChangedFiles.mockResolvedValue([]);
+            mockGetFileContents.mockResolvedValue({});
+            mockApiSubmitAgentReview.mockResolvedValue({
+                kind: 'completed',
+                review: {
+                    status: 'looks_good',
+                    reviewPass: true,
+                    summary: 's',
+                    findings: [],
+                    reviewCount: { current: 0, limit: Number.MAX_SAFE_INTEGER, remaining: Number.MAX_SAFE_INTEGER },
+                },
+            });
+            mockFormatAgentReview.mockReturnValue('rendered');
+
+            const result: any = await registeredTools.get('review_agent')!(mockExtra);
+
+            expect(result.structuredContent.reviewCount).toBeUndefined();
+            expect(JSON.stringify(result.structuredContent)).not.toContain('9007199254740991');
+        });
+
+        it('keeps a real quota in the structured data', async () => {
+            mockReadConfig.mockResolvedValue({ apiKey: 'key' });
+            mockGetRepoRoot.mockResolvedValue('/repo');
+            mockGetRepoName.mockResolvedValue('my-repo');
+            mockGetDiffHead.mockResolvedValue('diff content');
+            mockGetChangedFiles.mockResolvedValue([]);
+            mockGetFileContents.mockResolvedValue({});
+            const reviewCount = { current: 3, limit: 50, remaining: 47 };
+            mockApiSubmitAgentReview.mockResolvedValue({
+                kind: 'completed',
+                review: { status: 'looks_good', reviewPass: true, summary: 's', findings: [], reviewCount },
+            });
+            mockFormatAgentReview.mockReturnValue('rendered');
+
+            const result: any = await registeredTools.get('review_agent')!(mockExtra);
+
+            expect(result.structuredContent.reviewCount).toEqual(reviewCount);
         });
 
         it('returns structured content for an empty diff too', async () => {
