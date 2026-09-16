@@ -68,6 +68,21 @@ export function parseFileComments(fileComments: string[]): ParsedFileComment[] {
  * produces "Reviews used: 0/9007199254740991", so the counter is omitted
  * instead: there is no quota to report.
  */
+/**
+ * Wraps text in an inline code span that survives a backtick inside it.
+ *
+ * Markdown lets a code span use more backticks than its content contains, so
+ * the fence is widened to one longer than the longest run in the text. The
+ * paths here come from the service, and sanitizeServerText removes control
+ * characters rather than markdown.
+ */
+function inlineCode(text: string): string {
+    const longestRun = (text.match(/`+/g) ?? []).reduce((max, run) => Math.max(max, run.length), 0);
+    const fence = '`'.repeat(longestRun + 1);
+    const padding = text.startsWith('`') || text.endsWith('`') ? ' ' : '';
+    return `${fence}${padding}${text}${padding}${fence}`;
+}
+
 export function hasReviewQuota(
     rc: { current?: number; limit?: number; remaining?: number } | undefined,
 ): rc is { current: number; limit: number; remaining: number; resetAt?: string } {
@@ -233,14 +248,17 @@ export function formatAgentReview(response: AgentReviewResponse): string {
         lines.push('The reviewer needed these files but was not given them:');
         lines.push('');
         for (const file of missing) {
-            lines.push(`- \`${file}\``);
+            // Fenced rather than backtick-wrapped: sanitizeServerText strips
+            // control characters, not markdown, and a server-supplied path
+            // containing a backtick would otherwise break out of the code span.
+            lines.push(`- ${inlineCode(file)}`);
         }
         lines.push('');
         // Host-driven resubmit: the tool is a thin single-shot primitive and
         // does NOT loop on its own. The host re-calls `review_agent`, passing
         // the missing files back through the `relatedPaths` input.
         const pathsLiteral = missing.map(f => JSON.stringify(f)).join(', ');
-        lines.push(`To let the reviewer see these, call \`review_agent\` again with \`relatedPaths: [${pathsLiteral}]\`. Each re-run spends one review from your quota.`);
+        lines.push(`To let the reviewer see these, call \`review_agent\` again with ${inlineCode(`relatedPaths: [${pathsLiteral}]`)}. Each re-run spends one review from your quota.`);
     }
 
     if (hasReviewQuota(response.reviewCount)) {

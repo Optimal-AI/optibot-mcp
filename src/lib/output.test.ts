@@ -295,6 +295,27 @@ describe('formatError', () => {
     });
 });
 
+describe('missingContext rendering', () => {
+    const withMissing = (paths: string[]) => formatAgentReview({
+        status: 'needs_changes',
+        reviewPass: false,
+        findings: [],
+        summary: 's',
+        missingContext: paths,
+    } as never);
+
+    it('renders an ordinary path in a code span', () => {
+        expect(withMissing(['src/db.ts'])).toContain('`src/db.ts`');
+    });
+
+    it('keeps a path containing a backtick inside its code span', () => {
+        // sanitizeServerText strips control characters, not markdown, so a
+        // backtick in a server-supplied path would otherwise close the span.
+        const out = withMissing(['we`ird.ts']);
+        expect(out).toContain('``we`ird.ts``');
+    });
+});
+
 describe('hasReviewQuota', () => {
     it('accepts a real ceiling', () => {
         expect(hasReviewQuota({ current: 3, limit: 50, remaining: 47 })).toBe(true);

@@ -237,14 +237,6 @@ export async function getFileContents(
 }
 
 /**
- * Read caller-specified related-context files (callers, interfaces, tests) that
- * are NOT part of the diff, so the agent reviewer can see them. Paths are
- * repo-relative. Returns the readable file contents keyed by their
- * repo-relative path, plus a warning line for every path that was skipped
- * (missing, unreadable, sensitive, binary, outside the repo, or over the
- * upload budget) so the tool can surface it to the host.
- */
-/**
  * Resolves a caller-supplied related path to an absolute path inside
  * `repoRoot`, or returns null when it escapes.
  *
@@ -295,6 +287,14 @@ function isInsideRoot(root: string, target: string): boolean {
     return target === root || target.startsWith(root + path.sep);
 }
 
+/**
+ * Read caller-specified related-context files (callers, interfaces, tests) that
+ * are NOT part of the diff, so the agent reviewer can see them. Paths are
+ * repo-relative. Returns the readable file contents keyed by their
+ * repo-relative path, plus a warning line for every path that was skipped
+ * (missing, unreadable, sensitive, binary, outside the repo, or over the
+ * upload budget) so the tool can surface it to the host.
+ */
 export async function getRelatedFileContents(
     relatedPaths: string[],
     repoRoot: string,
@@ -376,11 +376,6 @@ export async function getRelatedFileContents(
     return { contents, warnings };
 }
 
-/**
- * Read a local diagnostics file (e.g. captured `tsc` or `eslint` output) as
- * plain text. The path is resolved relative to the repo root and must stay
- * within it — the same containment rule `readDiffFile` enforces.
- */
 /**
  * Reads a caller-supplied diagnostics file (local `tsc`/`eslint` output) whose
  * contents are sent to the reviewer.
