@@ -20,6 +20,14 @@ export interface WaitForAgentReviewResultOptions {
     now?: () => number;
     /** Injectable delay, for tests. */
     sleep?: (ms: number) => Promise<void>;
+    /**
+     * Called once per poll with the seconds elapsed so far. A review can run
+     * for minutes and the tool is otherwise silent for all of it, which reads
+     * to a host as a hung call — some cancel on their own timeout. Emitting on
+     * each tick also refreshes the timeout of any client that resets it on
+     * activity.
+     */
+    onPoll?: (elapsedSeconds: number) => void;
 }
 
 /**
@@ -59,6 +67,7 @@ export async function waitForAgentReviewResult(
     let consecutiveNotFound = 0;
 
     for (;;) {
+        options.onPoll?.(Math.round((now() - start) / 1000));
         const result = await client.getAgentReviewResult(reviewId);
         if (result.status === 'done' || result.status === 'failed') {
             return result;

@@ -80,3 +80,28 @@ describe('waitForAgentReviewResult', () => {
         ).rejects.toThrow('Timed out');
     });
 });
+
+describe('waitForAgentReviewResult progress', () => {
+    it('reports on every poll so a silent tool call does not read as hung', async () => {
+        const done = { status: 'done', result: { summary: 'ready' } };
+        const client = fetcher([{ status: 'pending' }, { status: 'pending' }, done]);
+        const seen: number[] = [];
+        let clock = 0;
+
+        await waitForAgentReviewResult(client as any, 'rev-1', {
+            sleep: noSleep,
+            now: () => (clock += 1000),
+            onPoll: (elapsed) => seen.push(elapsed),
+        });
+
+        expect(seen).toHaveLength(3);
+        expect(seen[0]).toBeGreaterThanOrEqual(0);
+    });
+
+    it('does not require an onPoll callback', async () => {
+        const client = fetcher([{ status: 'done', result: {} }]);
+        await expect(
+            waitForAgentReviewResult(client as any, 'rev-1', { sleep: noSleep }),
+        ).resolves.toBeDefined();
+    });
+});

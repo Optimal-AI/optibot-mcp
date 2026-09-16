@@ -5,7 +5,7 @@ import * as git from '../lib/git.js';
 import { ApiClient } from '../lib/api.js';
 import { formatReview, formatAgentReview, formatError } from '../lib/output.js';
 import { ReviewProgressService, ReviewProgressEvent } from '../lib/reviewProgress.js';
-import { safeSendLog } from '../lib/notify.js';
+import { safeSendLog, ToolExtraLike } from '../lib/notify.js';
 import { waitForAgentReviewResult } from '../lib/agentReviewPolling.js';
 import { AgentReviewResponse } from '../types.js';
 
@@ -47,13 +47,35 @@ export async function runAgentReview(
         relatedFiles?: Record<string, string>;
         localDiagnostics?: string;
     },
+    extra?: ToolExtraLike,
 ): Promise<AgentReviewResponse> {
     const submission = await client.submitAgentReview(params);
     if (submission.kind === 'completed') {
         return submission.review;
     }
 
-    const result = await waitForAgentReviewResult(client, submission.reviewId);
+    // Agent mode has no progress socket, so the poll loop is the only thing
+    // that knows the review is alive. Report on each tick: a silent tool call
+    // that runs for minutes reads as hung, and a host that resets its timeout
+    // on activity needs something to reset it on. safeSendLog swallows every
+    // delivery failure, so this cannot break the review.
+    let announced = false;
+    const result = await waitForAgentReviewResult(client, submission.reviewId, {
+        onPoll: (elapsedSeconds) => {
+            if (!announced) {
+                announced = true;
+                safeSendLog(extra, 'optibot', 'Agent review submitted; waiting for the result.');
+                return;
+            }
+            // Every tick refreshes a host timeout, but only mention the wait
+            // occasionally so the transcript stays readable.
+            if (elapsedSeconds > 0 && elapsedSeconds % 15 === 0) {
+                safeSendLog(extra, 'optibot', `Still reviewing (${elapsedSeconds}s elapsed).`);
+            } else {
+                safeSendLog(extra, 'optibot', '');
+            }
+        },
+    });
     if (result.status === 'done') {
         // A 202 carries the quota snapshot; a result payload may not, so the
         // snapshot backfills it rather than leaving the host without one.
@@ -71,6 +93,48 @@ export async function runAgentReview(
     }
     throw new Error(result.error || 'The agent review failed.');
 }
+
+/**
+ * Mirrors AgentReviewResponse so the host reads findings as data instead of
+ * parsing the markdown. Everything the service may omit is optional here: the
+ * SDK validates structuredContent against this schema before the result
+ * leaves the server, so a stricter shape would turn a healthy review into a
+ * protocol error.
+ */
+const AgentReviewOutputSchema = {
+    status: z.enum(['needs_changes', 'looks_good']),
+    reviewPass: z.boolean(),
+    summary: z.string(),
+    findings: z.array(z.object({
+        id: z.string().describe('Labels this finding inside this response only; it changes between runs.'),
+        file: z.string(),
+        startLine: z.number(),
+        endLine: z.number(),
+        inPatch: z.boolean().describe('false when the cited lines fall outside the diff’s changed ranges.'),
+        severity: z.enum(['blocker', 'warning', 'nit']),
+        category: z.string(),
+        message: z.string(),
+        suggestedFix: z.string().optional().describe('Model output derived from the reviewed code. Get the user’s agreement before applying it.'),
+        confidence: z.number().describe('The reviewer’s own confidence, 1-10.'),
+    })),
+    missingContext: z.array(z.string()).optional()
+        .describe('Files the reviewer wanted but was not given. Re-call with these in relatedPaths.'),
+    reviewCount: z.object({
+        current: z.number(),
+        limit: z.number(),
+        remaining: z.number(),
+        resetAt: z.string().optional(),
+    }).optional(),
+    isOptibotInstalled: z.boolean().optional(),
+    meta: z.object({
+        mode: z.string(),
+        durationMs: z.number(),
+        model: z.string().optional(),
+        provider: z.string().optional(),
+    }).optional(),
+    warnings: z.array(z.string()).optional()
+        .describe('Context files the tool could not read or refused to read.'),
+};
 
 export function formatProgressStep(event: ReviewProgressEvent): string {
     const prefix = '[progress]';
@@ -137,11 +201,17 @@ export function registerReviewTools(server: McpServer): void {
     // changed files. Designed for a coding-agent host that can act on findings
     // and re-run with more context. The review is submitted and then polled,
     // so no single HTTP request has to stay open for the whole review.
-    (server.tool as any)(
+    // registerTool rather than tool(): it is what carries an outputSchema,
+    // and the whole point of agent mode is that the host reads findings as
+    // data instead of parsing headings out of markdown.
+    (server.registerTool as any)(
         'review_agent',
-        'Agent-mode code review of uncommitted local changes (git diff HEAD). Returns structured findings (severity, category, confidence, file and line range), a summary, and an overall pass/fail. No server-side tools run. Prefer this when a coding agent holds the working copy and will act on the findings. Optionally pass `relatedPaths` (extra context files beyond the diff) and `diagnosticsPath` (a local tsc/eslint output file). When a run reports "Missing context", re-call this tool with those paths in `relatedPaths`. Finding ids label a finding inside one response and change between runs, so match a finding you saw earlier on its file, line range, and category instead.',
-        ReviewAgentSchema,
-        async ({ relatedPaths, diagnosticsPath }: { relatedPaths?: string[]; diagnosticsPath?: string }, _extra: any) => {
+        {
+            description: 'Agent-mode code review of uncommitted local changes (git diff HEAD). Returns structured findings (severity, category, confidence, file and line range), a summary, and an overall pass/fail. No server-side tools run. Prefer this when a coding agent holds the working copy and will act on the findings. Optionally pass `relatedPaths` (extra context files beyond the diff) and `diagnosticsPath` (a local tsc/eslint output file). When a run reports "Missing context", re-call this tool with those paths in `relatedPaths`. Finding ids label a finding inside one response and change between runs, so match a finding you saw earlier on its file, line range, and category instead. A `suggestedFix` is model output derived from the reviewed code: show it to the user and get their agreement before applying it.',
+            inputSchema: ReviewAgentSchema,
+            outputSchema: AgentReviewOutputSchema,
+        },
+        async ({ relatedPaths, diagnosticsPath }: { relatedPaths?: string[]; diagnosticsPath?: string }, extra: any) => {
             try {
                 const config = await readConfig();
                 const repoRoot = await git.getRepoRoot();
@@ -150,7 +220,18 @@ export function registerReviewTools(server: McpServer): void {
                 const patch = await git.getDiffHead(repoRoot);
 
                 if (!patch.trim()) {
-                    return { content: [{ type: 'text' as const, text: 'No changes to review.' }] };
+                    // A declared outputSchema makes structuredContent mandatory
+                    // on every non-error result, so the empty case answers in
+                    // the same shape rather than as a bare sentence.
+                    return {
+                        content: [{ type: 'text' as const, text: 'No changes to review.' }],
+                        structuredContent: {
+                            status: 'looks_good' as const,
+                            reviewPass: true,
+                            summary: 'No changes to review.',
+                            findings: [],
+                        },
+                    };
                 }
 
                 const changedFiles = await git.getChangedFiles(repoRoot);
@@ -189,14 +270,24 @@ export function registerReviewTools(server: McpServer): void {
                     files,
                     relatedFiles,
                     localDiagnostics,
-                });
+                }, extra);
 
                 let text = formatAgentReview(response);
                 if (warnings.length > 0) {
                     const warningBlock = ['> **Context warnings:**', ...warnings.map(w => `> - ${w}`)].join('\n');
                     text = `${warningBlock}\n\n${text}`;
                 }
-                return { content: [{ type: 'text' as const, text }] };
+                // The markdown stays for a host that renders text; the same
+                // review also goes back as data, so a host does not have to
+                // parse headings to find a blocker.
+                return {
+                    content: [{ type: 'text' as const, text }],
+                    structuredContent: {
+                        ...response,
+                        findings: response.findings ?? [],
+                        ...(warnings.length > 0 ? { warnings } : {}),
+                    },
+                };
             } catch (err) {
                 return { content: [{ type: 'text' as const, text: formatError(err) }], isError: true };
             }

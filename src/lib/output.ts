@@ -146,7 +146,12 @@ function formatFinding(finding: AgentReviewFinding, index: number): string[] {
 
     if (finding.suggestedFix && finding.suggestedFix.trim()) {
         lines.push('');
-        lines.push('**Suggested fix:**');
+        // A suggested fix is model output derived from the reviewed code,
+        // which the service treats as untrusted — it may include code someone
+        // else wrote. The service says plainly that it cannot enforce this
+        // rule, and the consumer here is an agent that can edit files without
+        // being asked, so the obligation is stated next to every fix.
+        lines.push('**Suggested fix** — show it to the user and get their agreement before applying it:');
         lines.push('');
         lines.push('```');
         lines.push(sanitizeServerText(finding.suggestedFix));

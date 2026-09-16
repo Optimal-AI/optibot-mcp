@@ -6,13 +6,23 @@
 
 - New `review_agent` tool: an agent-mode review of uncommitted local changes for a coding-agent host that already holds the working copy. It returns structured findings (severity, category, confidence, file and line range), a summary, and an overall pass/fail, and runs no server-side tools. Pass `relatedPaths` to attach context files the diff does not include, and `diagnosticsPath` to attach a local `tsc` or `eslint` run. When a review reports missing context, call the tool again with those paths in `relatedPaths`.
 - The review is submitted and then polled for, so no single request has to stay open for the whole review. A backend without the async path answers inline and the tool handles that with no configuration.
-- A review that cannot finish now says which of two things happened — the diff was too large for the reviewer to read, or the service stopped a review that ran too long — instead of passing the server's error text through.
+- `review_agent` returns the review as structured data as well as markdown. The tool declares an output schema mirroring the review response, so a host reads findings, severities and the pass/fail verdict as JSON instead of parsing headings. This raises the minimum `@modelcontextprotocol/sdk` to 1.11.4, the first release with `registerTool`.
+- The tool reports progress while it waits. An agent review can run for minutes, and a silent tool call reads to a host as a hung one; each poll emits a notification, which also refreshes the timeout of a host that resets it on activity.
+- A review that cannot finish says which of two things happened — the diff was too large for the reviewer to read, or the service stopped a review that ran too long — instead of passing the server's error text through.
 
 ### Changed
 
 - Finding ids are documented as labels within one response rather than as stable keys. The service derives an id from the reviewer's wording and the reviewer rephrases itself on every call, so the same defect returns a different id on the next run. Match a finding on its file, line range, and category instead.
 - `review_agent` no longer asks the host to classify findings as signal or noise. The Optibot skill dropped that self-report, and the two hosts now say the same thing about the same review.
+- Every suggested fix is labelled as something to confirm with the user before applying. It is model output derived from the reviewed code, which the service treats as untrusted, and the consumer here can edit files unattended.
 - The MCP registry manifest (`server.json`) had been left at 1.4.1 while the package was at 1.5.0. Both now carry the package version.
+
+### Fixed
+
+- The review renderers and `get_status` printed the service's "no limit" value literally, as `Reviews used: 0/9007199254740991`. With no daily cap configured — the default for agent reviews — the counter is omitted, and `get_status` says `No daily limit.`
+- Backend error messages now reach the host intact. The client read only a `message` field while the service answers with `error`, so an actionable failure arrived as `API request failed: Payload Too Large (413)` with the explanation discarded.
+- A related-context file is no longer read through a symlink that leaves the repository. Paths are resolved with `realpath` before the containment check, and absolute, `~`, and `..` paths are refused.
+- The server advertised version 1.3.2 to the host while the package was several releases past it. Both that and the client headers now read the package version.
 
 ## [1.5.0] - 2026-08-12
 

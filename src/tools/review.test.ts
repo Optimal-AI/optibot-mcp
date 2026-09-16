@@ -69,15 +69,24 @@ import { registerReviewTools, formatProgressStep } from './review.js';
 
 describe('review tools', () => {
     let registeredTools: Map<string, Function>;
+    let registeredToolConfigs: Map<string, any>;
 
     beforeEach(() => {
         registeredTools = new Map();
+        registeredToolConfigs = new Map();
 
+        const capture = (...args: any[]) => {
+            const name = args[0] as string;
+            const handler = args[args.length - 1] as Function;
+            registeredTools.set(name, handler);
+        };
         const server = {
-            tool: vi.fn((...args: any[]) => {
-                const name = args[0] as string;
-                const handler = args[args.length - 1] as Function;
-                registeredTools.set(name, handler);
+            tool: vi.fn(capture),
+            // review_agent registers through registerTool so it can declare an
+            // outputSchema; the others still use tool().
+            registerTool: vi.fn((name: string, config: any, handler: Function) => {
+                registeredToolConfigs.set(name, config);
+                capture(name, handler);
             }),
         } as any;
 
@@ -204,6 +213,52 @@ describe('review tools', () => {
             expect(mockApiReviewAgent).toHaveBeenCalledWith(
                 expect.objectContaining({ patch: 'diff content', repositoryName: 'my-repo', files: { 'a.ts': 'contents' } })
             );
+        });
+
+        it('declares an output schema and returns the review as structured data', async () => {
+            mockReadConfig.mockResolvedValue({ apiKey: 'key' });
+            mockGetRepoRoot.mockResolvedValue('/repo');
+            mockGetRepoName.mockResolvedValue('my-repo');
+            mockGetDiffHead.mockResolvedValue('diff content');
+            mockGetChangedFiles.mockResolvedValue([]);
+            mockGetFileContents.mockResolvedValue({});
+            const review = {
+                status: 'needs_changes',
+                reviewPass: false,
+                summary: 's',
+                findings: [{ id: 'AF-1', file: 'a.ts', startLine: 1, endLine: 1, inPatch: true, severity: 'blocker', category: 'bug', message: 'm', confidence: 9 }],
+            };
+            mockApiSubmitAgentReview.mockResolvedValue({ kind: 'completed', review });
+            mockFormatAgentReview.mockReturnValue('rendered');
+
+            const config = registeredToolConfigs.get('review_agent');
+            expect(config?.outputSchema).toBeDefined();
+            expect(config?.inputSchema).toBeDefined();
+
+            const result: any = await registeredTools.get('review_agent')!(mockExtra);
+
+            expect(result.structuredContent).toMatchObject({
+                status: 'needs_changes',
+                reviewPass: false,
+                findings: [expect.objectContaining({ id: 'AF-1' })],
+            });
+            expect(result.content[0].text).toBe('rendered');
+        });
+
+        it('returns structured content for an empty diff too', async () => {
+            mockReadConfig.mockResolvedValue({ apiKey: 'key' });
+            mockGetRepoRoot.mockResolvedValue('/repo');
+            mockGetRepoName.mockResolvedValue('my-repo');
+            mockGetDiffHead.mockResolvedValue('   ');
+
+            const result: any = await registeredTools.get('review_agent')!(mockExtra);
+
+            expect(result.structuredContent).toEqual({
+                status: 'looks_good',
+                reviewPass: true,
+                summary: 'No changes to review.',
+                findings: [],
+            });
         });
 
         it('polls for the result when the backend accepts the review (202)', async () => {
