@@ -315,7 +315,12 @@ export async function getRelatedFileContents(
             continue;
         }
 
-        if (isSensitiveFile(relativePath)) {
+        // Both the requested name and the resolved one are checked. Checking
+        // only the requested name let a symlink called `notes.md` that points
+        // at `.env` inside the repository pass every guard and upload the
+        // secret; checking only the resolved one would miss nothing today but
+        // costs nothing to keep.
+        if (isSensitiveFile(relativePath) || isSensitiveFile(absolutePath)) {
             console.error(`[security] Skipping potentially sensitive related file: ${relativePath}`);
             warnings.push(`Skipped potentially sensitive related file: ${relativePath}`);
             continue;
@@ -323,7 +328,7 @@ export async function getRelatedFileContents(
 
         // Reject known-binary extensions before reading, so we never pull a
         // large binary file into memory.
-        if (isBinaryExtension(relativePath)) {
+        if (isBinaryExtension(relativePath) || isBinaryExtension(absolutePath)) {
             warnings.push(`Skipped binary related file: ${relativePath}`);
             continue;
         }
@@ -377,11 +382,13 @@ export async function readDiagnosticsFile(filePath: string, repoRoot: string): P
         throw new Error(`Diagnostics file must be a readable file within the repository. Got: ${filePath}`);
     }
 
-    if (isSensitiveFile(filePath)) {
+    // Checked against the resolved path as well as the requested one: a
+    // symlink named `tsc.log` pointing at a private key would otherwise pass.
+    if (isSensitiveFile(filePath) || isSensitiveFile(absolutePath)) {
         throw new Error(`Refusing to read a potentially sensitive diagnostics file: ${filePath}`);
     }
 
-    if (isBinaryExtension(filePath)) {
+    if (isBinaryExtension(filePath) || isBinaryExtension(absolutePath)) {
         throw new Error(`Diagnostics file looks binary, expected text output: ${filePath}`);
     }
 

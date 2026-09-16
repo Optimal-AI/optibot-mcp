@@ -76,7 +76,7 @@ export function hasReviewQuota(
     // three, so a response carrying current and limit but no remaining would
     // otherwise render "(undefined remaining)".
     if (typeof rc.current !== 'number' || typeof rc.limit !== 'number' || typeof rc.remaining !== 'number') return false;
-    if (!Number.isFinite(rc.limit) || !Number.isFinite(rc.current)) return false;
+    if (!Number.isFinite(rc.limit) || !Number.isFinite(rc.current) || !Number.isFinite(rc.remaining)) return false;
     return rc.limit < Number.MAX_SAFE_INTEGER;
 }
 

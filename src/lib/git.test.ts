@@ -470,6 +470,30 @@ describe('getRelatedFileContents', () => {
         expect(fs.readFile).not.toHaveBeenCalled();
     });
 
+    it('refuses a symlink whose target is a sensitive file inside the repo', async () => {
+        // Containment passes — the target is inside the repository — so only
+        // checking the resolved name stops `.env` being read and uploaded.
+        vi.mocked(fs.realpath).mockImplementation((async (p: unknown) =>
+            String(p).endsWith('notes.md') ? '/repo/.env' : path.resolve(String(p))) as never);
+
+        const { contents, warnings } = await getRelatedFileContents(['notes.md'], '/repo');
+
+        expect(contents).toEqual({});
+        expect(warnings[0]).toContain('sensitive');
+        expect(fs.readFile).not.toHaveBeenCalled();
+    });
+
+    it('refuses a symlink whose target is a binary file inside the repo', async () => {
+        vi.mocked(fs.realpath).mockImplementation((async (p: unknown) =>
+            String(p).endsWith('notes.md') ? '/repo/assets/logo.png' : path.resolve(String(p))) as never);
+
+        const { contents, warnings } = await getRelatedFileContents(['notes.md'], '/repo');
+
+        expect(contents).toEqual({});
+        expect(warnings[0]).toContain('binary');
+        expect(fs.readFile).not.toHaveBeenCalled();
+    });
+
     it('refuses a symlink inside the repo whose target escapes it', async () => {
         // The lexical check passes for this path; only realpath exposes that
         // the link resolves outside the repository.
@@ -565,6 +589,14 @@ describe('readDiagnosticsFile', () => {
         await expect(readDiagnosticsFile('build/tsc.log', '/repo')).rejects.toThrow(
             'must be a readable file within the repository'
         );
+        expect(fs.readFile).not.toHaveBeenCalled();
+    });
+
+    it('refuses a symlink whose target is a sensitive file inside the repo', async () => {
+        vi.mocked(fs.realpath).mockImplementation((async (p: unknown) =>
+            String(p).endsWith('tsc.log') ? '/repo/id_rsa' : path.resolve(String(p))) as never);
+
+        await expect(readDiagnosticsFile('build/tsc.log', '/repo')).rejects.toThrow('potentially sensitive');
         expect(fs.readFile).not.toHaveBeenCalled();
     });
 

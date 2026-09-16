@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { sanitizeServerText, parseFileComments, formatReview, formatAgentReview, formatResetTime, formatError } from './output.js';
+import { sanitizeServerText, parseFileComments, formatReview, formatAgentReview, formatResetTime, formatError, hasReviewQuota } from './output.js';
 import { AgentReviewResponse, AgentReviewFinding } from '../types.js';
 
 describe('sanitizeServerText', () => {
@@ -292,6 +292,33 @@ describe('formatError', () => {
         expect(msg).not.toContain('\x1b]0;');
         expect(msg).not.toContain('\x07');
         expect(msg).toContain('https://getoptimal.ai/contact');
+    });
+});
+
+describe('hasReviewQuota', () => {
+    it('accepts a real ceiling', () => {
+        expect(hasReviewQuota({ current: 3, limit: 50, remaining: 47 })).toBe(true);
+    });
+
+    it('rejects the service\'s unlimited sentinel', () => {
+        expect(hasReviewQuota({
+            current: 0,
+            limit: Number.MAX_SAFE_INTEGER,
+            remaining: Number.MAX_SAFE_INTEGER,
+        })).toBe(false);
+    });
+
+    it('rejects a response missing remaining, which would render "undefined"', () => {
+        expect(hasReviewQuota({ current: 3, limit: 50 } as never)).toBe(false);
+    });
+
+    it('rejects a non-finite number, which would render "NaN"', () => {
+        expect(hasReviewQuota({ current: 3, limit: 50, remaining: NaN })).toBe(false);
+        expect(hasReviewQuota({ current: 3, limit: Infinity, remaining: 5 })).toBe(false);
+    });
+
+    it('rejects an absent reviewCount', () => {
+        expect(hasReviewQuota(undefined)).toBe(false);
     });
 });
 
