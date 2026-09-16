@@ -19,11 +19,18 @@ vi.mock('../lib/api.js', () => ({
     },
 }));
 
-vi.mock('../lib/output.js', () => ({
-    formatError: (...args: unknown[]) => mockFormatError(...args),
-    formatResetTime: (...args: unknown[]) => mockFormatResetTime(...args),
-    sanitizeServerText: (...args: unknown[]) => mockSanitize(...(args as [string])),
-}));
+vi.mock('../lib/output.js', async (importOriginal) => {
+    // The formatters are mocked so the tests can assert on calls, but
+    // hasReviewQuota is a pure predicate the tool uses to decide what to
+    // render: mocking it away would test nothing.
+    const actual = await importOriginal<typeof import('../lib/output.js')>();
+    return {
+        formatError: (...args: unknown[]) => mockFormatError(...args),
+        formatResetTime: (...args: unknown[]) => mockFormatResetTime(...args),
+        sanitizeServerText: (...args: unknown[]) => mockSanitize(...(args as [string])),
+        hasReviewQuota: actual.hasReviewQuota,
+    };
+});
 
 vi.mock('../lib/jwt.js', () => ({
     getOrganizationIdFromToken: (...args: unknown[]) => mockGetOrgIdFromToken(...args),

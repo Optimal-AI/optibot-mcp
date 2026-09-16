@@ -33,8 +33,14 @@ export class ApiClient {
 
         try {
             errorData = await response.json() as Record<string, unknown>;
-            const msg = (errorData as { message?: unknown }).message;
-            if (typeof msg === 'string') {
+            // The backend answers with `error` on every path the agent-mode
+            // endpoints use, and with `message` on some older ones. Reading
+            // only `message` dropped the actionable text — a 413 arrived as
+            // "API request failed: Payload Too Large (413)" with the
+            // explanation of what to do about it thrown away.
+            const body = errorData as { message?: unknown; error?: unknown };
+            const msg = typeof body.error === 'string' ? body.error : body.message;
+            if (typeof msg === 'string' && msg.trim() !== '') {
                 errorMessage = msg;
             }
         } catch {

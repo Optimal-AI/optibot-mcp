@@ -222,6 +222,57 @@ export async function getFileContents(
  * (missing, unreadable, sensitive, binary, outside the repo, or over the
  * upload budget) so the tool can surface it to the host.
  */
+/**
+ * Resolves a caller-supplied related path to an absolute path inside
+ * `repoRoot`, or returns null when it escapes.
+ *
+ * The lexical check alone is not enough: `path.resolve` cannot see through a
+ * symlink, so a link that lives inside the repository but points outside it
+ * passes a `startsWith` test and then reads the target anyway. Both the root
+ * and the candidate are resolved through realpath before comparing.
+ *
+ * This matters most for paths the reviewer asked for. The `missingContext`
+ * list is the one field a caller acts on without reading it first, and the
+ * host may pass those paths straight back in `relatedPaths`, so the decision
+ * to read lands here.
+ */
+export async function resolveRelatedPath(
+    requestedPath: string,
+    repoRoot: string,
+): Promise<string | null> {
+    if (typeof requestedPath !== 'string') return null;
+    const candidate = requestedPath.trim();
+    if (candidate === '') return null;
+    // Refused before touching the filesystem: both name a location the
+    // repository does not contain.
+    if (path.isAbsolute(candidate) || candidate.startsWith('~')) return null;
+    // A NUL truncates the path in whatever syscall reads it.
+    if (candidate.includes('\0')) return null;
+
+    let realRoot: string;
+    try {
+        realRoot = await fs.realpath(repoRoot);
+    } catch {
+        realRoot = path.resolve(repoRoot);
+    }
+
+    const absolutePath = path.resolve(realRoot, candidate);
+    if (!isInsideRoot(realRoot, absolutePath)) return null;
+
+    try {
+        const realPath = await fs.realpath(absolutePath);
+        if (!isInsideRoot(realRoot, realPath)) return null;
+        return realPath;
+    } catch {
+        return null;
+    }
+}
+
+/** True when `target` is `root` itself or sits beneath it. */
+function isInsideRoot(root: string, target: string): boolean {
+    return target === root || target.startsWith(root + path.sep);
+}
+
 export async function getRelatedFileContents(
     relatedPaths: string[],
     repoRoot: string
@@ -234,11 +285,11 @@ export async function getRelatedFileContents(
         const relativePath = rawPath.trim();
         if (!relativePath) continue;
 
-        const absolutePath = path.resolve(repoRoot, relativePath);
-
-        // Prevent escaping the repo root via absolute paths or `..` traversal.
-        if (absolutePath !== repoRoot && !absolutePath.startsWith(repoRoot + path.sep)) {
-            warnings.push(`Skipped related file outside the repository: ${relativePath}`);
+        // realpath-based: an absolute path, a `..` climb, a `~` path, or a
+        // symlink whose target leaves the repository are all refused here.
+        const absolutePath = await resolveRelatedPath(relativePath, repoRoot);
+        if (!absolutePath) {
+            warnings.push(`Skipped related file: not a readable file inside the repository: ${relativePath}`);
             continue;
         }
 

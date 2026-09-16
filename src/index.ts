@@ -9,6 +9,7 @@ import { registerOrgTools } from './tools/org.js';
 import { registerStatusTool } from './tools/status.js';
 import { registerScanTools } from './tools/scan.js';
 import { registerSetupCiTool } from './tools/setupCi.js';
+import { PACKAGE_VERSION } from './lib/version.js';
 
 // `logging: {}` advertises the logging capability so the SDK accepts our
 // `notifications/message` events emitted by ReviewProgressService /
@@ -17,7 +18,9 @@ import { registerSetupCiTool } from './tools/setupCi.js';
 const server = new McpServer(
     {
         name: 'optibot',
-        version: '1.3.2',
+        // Read from package.json rather than hardcoded: this string is what
+        // the host displays, and it had drifted several releases behind.
+        version: PACKAGE_VERSION,
     },
     {
         capabilities: {

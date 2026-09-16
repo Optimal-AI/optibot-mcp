@@ -406,6 +406,10 @@ describe('getFileContents', () => {
 describe('getRelatedFileContents', () => {
     beforeEach(() => {
         vi.mocked(fs.readFile).mockReset();
+        // Containment resolves both the root and the candidate through
+        // realpath. Default to a lexical resolution so the tests behave like
+        // paths with no symlinks; the symlink test overrides this.
+        vi.mocked(fs.realpath).mockImplementation((async (p: unknown) => path.resolve(String(p))) as never);
     });
 
     it('reads each related path and keys contents by repo-relative path', async () => {
@@ -450,7 +454,31 @@ describe('getRelatedFileContents', () => {
         );
 
         expect(contents).toEqual({});
-        expect(warnings[0]).toContain('outside the repository');
+        expect(warnings[0]).toContain('not a readable file inside the repository');
+        expect(fs.readFile).not.toHaveBeenCalled();
+    });
+
+    it('refuses an absolute path and a home-relative path', async () => {
+        const { contents, warnings } = await getRelatedFileContents(
+            ['/etc/passwd', '~/.ssh/id_rsa'],
+            '/repo'
+        );
+
+        expect(contents).toEqual({});
+        expect(warnings).toHaveLength(2);
+        expect(fs.readFile).not.toHaveBeenCalled();
+    });
+
+    it('refuses a symlink inside the repo whose target escapes it', async () => {
+        // The lexical check passes for this path; only realpath exposes that
+        // the link resolves outside the repository.
+        vi.mocked(fs.realpath).mockImplementation((async (p: unknown) =>
+            String(p).endsWith('notes.md') ? '/Users/someone/.ssh/id_rsa' : path.resolve(String(p))) as never);
+
+        const { contents, warnings } = await getRelatedFileContents(['notes.md'], '/repo');
+
+        expect(contents).toEqual({});
+        expect(warnings[0]).toContain('not a readable file inside the repository');
         expect(fs.readFile).not.toHaveBeenCalled();
     });
 

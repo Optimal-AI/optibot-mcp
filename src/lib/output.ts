@@ -58,6 +58,25 @@ export function parseFileComments(fileComments: string[]): ParsedFileComment[] {
     return parsed;
 }
 
+/**
+ * True when the service reported a real daily ceiling.
+ *
+ * With no daily limit configured — the default for agent reviews, and the
+ * current state of production — the backend answers with
+ * Number.MAX_SAFE_INTEGER for `limit` and `remaining` and 0 for `current`,
+ * because it short-circuits before counting anything. Rendering that verbatim
+ * produces "Reviews used: 0/9007199254740991", so the counter is omitted
+ * instead: there is no quota to report.
+ */
+export function hasReviewQuota(
+    rc: { current?: number; limit?: number; remaining?: number } | undefined,
+): rc is { current: number; limit: number; remaining: number; resetAt?: string } {
+    if (!rc) return false;
+    if (typeof rc.current !== 'number' || typeof rc.limit !== 'number') return false;
+    if (!Number.isFinite(rc.limit) || !Number.isFinite(rc.current)) return false;
+    return rc.limit < Number.MAX_SAFE_INTEGER;
+}
+
 export function formatReview(response: ReviewResponse): string {
     const lines: string[] = [];
 
@@ -78,7 +97,7 @@ export function formatReview(response: ReviewResponse): string {
         }
     }
 
-    if (response.reviewCount) {
+    if (hasReviewQuota(response.reviewCount)) {
         const rc = response.reviewCount;
         let line = `Reviews used: ${rc.current}/${rc.limit} (${rc.remaining} remaining)`;
         if (rc.resetAt) {
@@ -216,7 +235,7 @@ export function formatAgentReview(response: AgentReviewResponse): string {
         lines.push(`To let the reviewer see these, call \`review_agent\` again with \`relatedPaths: [${pathsLiteral}]\`. Each re-run spends one review from your quota.`);
     }
 
-    if (response.reviewCount) {
+    if (hasReviewQuota(response.reviewCount)) {
         const rc = response.reviewCount;
         let line = `Reviews used: ${rc.current}/${rc.limit} (${rc.remaining} remaining)`;
         if (rc.resetAt) {

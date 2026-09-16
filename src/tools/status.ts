@@ -1,7 +1,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { readConfig } from '../lib/config.js';
 import { ApiClient } from '../lib/api.js';
-import { formatError, formatResetTime, sanitizeServerText } from '../lib/output.js';
+import { formatError, formatResetTime, sanitizeServerText, hasReviewQuota } from '../lib/output.js';
 import { getOrganizationIdFromToken } from '../lib/jwt.js';
 import { ReviewStatus, OrgListResponse } from '../types.js';
 
@@ -55,18 +55,37 @@ export function registerStatusTool(server: McpServer): void {
                     // Backend response shape can vary across deployments; only render
                     // numeric fields that are actually present so we don't surface
                     // "undefined / undefined" to the LLM.
-                    const hasUsage = typeof rs?.current === 'number' && typeof rs?.limit === 'number';
-                    const hasRemaining = typeof rs?.remaining === 'number';
-                    if (hasUsage || hasRemaining || rs?.resetAt) {
+                    // hasReviewQuota also rejects the service's unlimited
+                    // sentinel, which would otherwise render as
+                    // "Used: 0 / 9007199254740991".
+                    // Read the raw fields before the guard narrows rs.
+                    const rawLimit = rs?.limit;
+                    const metered = hasReviewQuota(rs);
+                    // A limit that is present but not a real ceiling is the
+                    // service's unlimited sentinel; a limit that is absent is a
+                    // response shape that carries no usage at all. The first
+                    // gets a line saying so, the second gets nothing.
+                    const unlimited = !metered && typeof rawLimit === 'number';
+                    const rawRemaining = rs?.remaining;
+                    const remaining = typeof rawRemaining === 'number'
+                        && Number.isFinite(rawRemaining)
+                        && rawRemaining < Number.MAX_SAFE_INTEGER
+                        ? rawRemaining
+                        : undefined;
+                    // Read resetAt before the guard narrows rs.
+                    const resetAt = rs?.resetAt;
+                    if (metered || unlimited || remaining !== undefined || resetAt) {
                         lines.push('', '## Review Quota', '');
-                        if (hasUsage) {
+                        if (metered) {
                             lines.push(`Used: ${rs.current} / ${rs.limit}`);
+                        } else if (unlimited) {
+                            lines.push('No daily limit.');
                         }
-                        if (hasRemaining) {
-                            lines.push(`Remaining: ${rs.remaining}`);
+                        if (remaining !== undefined) {
+                            lines.push(`Remaining: ${remaining}`);
                         }
-                        if (rs.resetAt) {
-                            lines.push(`Resets: ${formatResetTime(rs.resetAt)}`);
+                        if (resetAt) {
+                            lines.push(`Resets: ${formatResetTime(resetAt)}`);
                         }
                     }
                 }
