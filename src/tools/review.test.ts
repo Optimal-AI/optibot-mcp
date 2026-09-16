@@ -552,7 +552,7 @@ describe('review tools', () => {
             const handler = registeredTools.get('review_agent')!;
             await handler({ diagnosticsPath: 'build/tsc.log' }, mockExtra);
 
-            expect(mockReadDiagnosticsFile).toHaveBeenCalledWith('build/tsc.log', '/repo');
+            expect(mockReadDiagnosticsFile).toHaveBeenCalledWith('build/tsc.log', '/repo', expect.anything());
             expect(mockApiReviewAgent).toHaveBeenCalledWith(
                 expect.objectContaining({ localDiagnostics: 'tsc: 2 errors' })
             );

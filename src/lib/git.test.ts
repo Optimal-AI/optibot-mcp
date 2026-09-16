@@ -639,8 +639,19 @@ describe('readDiagnosticsFile', () => {
 
     it('refuses a file larger than the upload cap', async () => {
         vi.mocked(fs.stat).mockResolvedValue({ size: 26 * 1024 * 1024 } as never);
-        await expect(readDiagnosticsFile('build/tsc.log', '/repo')).rejects.toThrow('too large to send');
+        await expect(readDiagnosticsFile('build/tsc.log', '/repo')).rejects.toThrow('upload budget');
         expect(fs.readFile).not.toHaveBeenCalled();
+    });
+
+    it('spends from the shared budget, so diagnostics cannot double the cap', async () => {
+        const budget = createUploadBudget(10);
+        vi.mocked(fs.stat).mockResolvedValue({ size: 10 } as never);
+        vi.mocked(fs.readFile).mockResolvedValue('0123456789');
+
+        await expect(readDiagnosticsFile('a.log', '/repo', budget)).resolves.toBe('0123456789');
+        expect(budget.remaining()).toBe(0);
+        // The budget is now spent, so a second read of the same size is refused.
+        await expect(readDiagnosticsFile('b.log', '/repo', budget)).rejects.toThrow('upload budget');
     });
 });
 

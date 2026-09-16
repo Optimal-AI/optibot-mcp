@@ -398,7 +398,11 @@ export async function getRelatedFileContents(
  * Without that, a `diagnosticsPath` of `.env` or `id_rsa` would be read and
  * uploaded as plain text.
  */
-export async function readDiagnosticsFile(filePath: string, repoRoot: string): Promise<string> {
+export async function readDiagnosticsFile(
+    filePath: string,
+    repoRoot: string,
+    budget: UploadBudget = createUploadBudget(),
+): Promise<string> {
     const absolutePath = await resolveRelatedPath(filePath, repoRoot);
     if (!absolutePath) {
         throw new Error(`Diagnostics file must be a readable file within the repository. Got: ${filePath}`);
@@ -414,9 +418,12 @@ export async function readDiagnosticsFile(filePath: string, repoRoot: string): P
         throw new Error(`Diagnostics file looks binary, expected text output: ${filePath}`);
     }
 
+    // Spends from the same budget as the changed files and the related files.
+    // Diagnostics travel in the same request, so a separate 25 MB allowance
+    // here is the twice-the-cap problem the shared budget exists to prevent.
     const stat = await fs.stat(absolutePath);
-    if (stat.size > MAX_UPLOAD_BYTES) {
-        throw new Error(`Diagnostics file is too large to send (${stat.size} bytes, limit ${MAX_UPLOAD_BYTES}): ${filePath}`);
+    if (!budget.canFit(stat.size)) {
+        throw new Error(`Diagnostics file does not fit the remaining upload budget (${stat.size} bytes, ${budget.remaining()} left): ${filePath}`);
     }
 
     const content = await fs.readFile(absolutePath, 'utf-8');
@@ -426,6 +433,7 @@ export async function readDiagnosticsFile(filePath: string, repoRoot: string): P
     if (content.includes('\u0000')) {
         throw new Error(`Diagnostics file looks binary, expected text output: ${filePath}`);
     }
+    budget.spend(Buffer.byteLength(content, 'utf-8'));
     return content;
 }
 

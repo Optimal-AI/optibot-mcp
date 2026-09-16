@@ -260,7 +260,7 @@ export function registerReviewTools(server: McpServer): void {
                 let localDiagnostics: string | undefined;
                 if (diagnosticsPath) {
                     try {
-                        const text = await git.readDiagnosticsFile(diagnosticsPath, repoRoot);
+                        const text = await git.readDiagnosticsFile(diagnosticsPath, repoRoot, uploadBudget);
                         if (text.trim()) {
                             localDiagnostics = text;
                         }
