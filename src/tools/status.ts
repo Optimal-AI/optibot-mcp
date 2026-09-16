@@ -61,11 +61,12 @@ export function registerStatusTool(server: McpServer): void {
                     // Read the raw fields before the guard narrows rs.
                     const rawLimit = rs?.limit;
                     const metered = hasReviewQuota(rs);
-                    // A limit that is present but not a real ceiling is the
-                    // service's unlimited sentinel; a limit that is absent is a
-                    // response shape that carries no usage at all. The first
-                    // gets a line saying so, the second gets nothing.
-                    const unlimited = !metered && typeof rawLimit === 'number';
+                    // Only the service's actual sentinel means "no limit".
+                    // Testing for any number instead misreported a real
+                    // ceiling: a response carrying current and limit but no
+                    // remaining fails hasReviewQuota, and would then have been
+                    // announced as unlimited when a limit was in force.
+                    const unlimited = rawLimit === Number.MAX_SAFE_INTEGER;
                     const rawRemaining = rs?.remaining;
                     const remaining = typeof rawRemaining === 'number'
                         && Number.isFinite(rawRemaining)

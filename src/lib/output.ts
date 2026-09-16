@@ -185,7 +185,10 @@ function formatLineRange(startLine: number, endLine: number): string {
 
 function formatFinding(finding: AgentReviewFinding, index: number): string[] {
     const lines: string[] = [];
-    const sev = SEVERITY_LABEL[finding.severity] ?? finding.severity;
+    // The fallback is the service's own string when it is not one of the three
+    // known severities, so it is sanitized like every other field it could
+    // reach the heading through.
+    const sev = SEVERITY_LABEL[finding.severity] ?? sanitizeServerText(String(finding.severity ?? ''));
     const loc = `${sanitizeServerText(finding.file)}:${formatLineRange(finding.startLine, finding.endLine)}`;
     const patchNote = finding.inPatch ? '' : ' _(outside the changed lines)_';
 

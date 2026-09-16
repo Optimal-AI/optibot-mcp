@@ -279,7 +279,12 @@ export function registerReviewTools(server: McpServer): void {
                     localDiagnostics,
                 }, extra);
 
-                let text = formatAgentReview(response);
+                // Sanitized once, then used for both channels. Rendering from
+                // the raw response meant the markdown relied on formatAgentReview
+                // cleaning each field as it interpolated it, and a field it
+                // missed — the severity fallback — reached the heading raw.
+                const safeResponse = sanitizeAgentReviewResponse(response);
+                let text = formatAgentReview(safeResponse);
                 if (warnings.length > 0) {
                     const warningBlock = ['> **Context warnings:**', ...warnings.map(w => `> - ${w}`)].join('\n');
                     text = `${warningBlock}\n\n${text}`;
@@ -294,7 +299,7 @@ export function registerReviewTools(server: McpServer): void {
                 // Sanitized before it leaves, exactly as the markdown is: the
                 // structured payload is part of the same tool result, and it is
                 // the channel a coding-agent host actually consumes.
-                const { reviewCount, ...rest } = sanitizeAgentReviewResponse(response);
+                const { reviewCount, ...rest } = safeResponse;
                 return {
                     content: [{ type: 'text' as const, text }],
                     structuredContent: {

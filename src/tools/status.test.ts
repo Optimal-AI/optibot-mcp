@@ -105,6 +105,36 @@ describe('status tool', () => {
         expect(text).toContain('Used: 3 / 100');
     });
 
+    it('does not call a real limit unlimited when remaining is missing', async () => {
+        // hasReviewQuota rejects this shape because remaining is absent, but a
+        // ceiling of 50 is still in force — announcing "no daily limit" here
+        // would tell the user the opposite of the truth.
+        delete process.env.OPTIBOT_API_KEY;
+        mockReadConfig.mockResolvedValue({ apiKey: 'k' });
+        mockListOrganizations.mockResolvedValue({ organizations: [], currentOrganizationId: 0 });
+        mockGetOrgIdFromToken.mockReturnValue(null);
+        mockGetReviewStatus.mockResolvedValue({ current: 3, limit: 50 });
+
+        const result = await registered.get('get_status')!({});
+        expect(result.content[0].text).not.toContain('No daily limit');
+    });
+
+    it('says there is no daily limit only for the service sentinel', async () => {
+        delete process.env.OPTIBOT_API_KEY;
+        mockReadConfig.mockResolvedValue({ apiKey: 'k' });
+        mockListOrganizations.mockResolvedValue({ organizations: [], currentOrganizationId: 0 });
+        mockGetOrgIdFromToken.mockReturnValue(null);
+        mockGetReviewStatus.mockResolvedValue({
+            current: 0,
+            limit: Number.MAX_SAFE_INTEGER,
+            remaining: Number.MAX_SAFE_INTEGER,
+        });
+
+        const result = await registered.get('get_status')!({});
+        expect(result.content[0].text).toContain('No daily limit');
+        expect(result.content[0].text).not.toContain('9007199254740991');
+    });
+
     it('prefers the JWT claim over currentOrganizationId for the active org', async () => {
         delete process.env.OPTIBOT_API_KEY;
         mockReadConfig.mockResolvedValue({ apiKey: 'k' });
