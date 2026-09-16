@@ -82,7 +82,10 @@ export function registerStatusTool(server: McpServer): void {
                         } else if (unlimited) {
                             lines.push('No daily limit.');
                         }
-                        if (remaining !== undefined) {
+                        // Not when the service said there is no limit: printing
+                        // "No daily limit." and "Remaining: 47" together tells
+                        // the reader two different things.
+                        if (!unlimited && remaining !== undefined) {
                             lines.push(`Remaining: ${remaining}`);
                         }
                         if (resetAt) {

@@ -27,6 +27,7 @@ import {
     assertSafeRefName,
     createUploadBudget,
     screenReadablePath,
+    looksBinary,
 } from './git.js';
 
 const execMock = vi.mocked(exec);
@@ -879,5 +880,46 @@ describe('every reader refuses a symlink to a secret', () => {
     it('readDiagnosticsFile', async () => {
         await expect(readDiagnosticsFile('notes.md', '/repo')).rejects.toThrow('sensitive');
         expect(fs.readFile).not.toHaveBeenCalled();
+    });
+});
+
+describe('looksBinary — one rule for every reader', () => {
+    it('accepts ordinary source text', () => {
+        expect(looksBinary('export const x = 1;\n// note\n')).toBe(false);
+    });
+
+    it('rejects a NUL byte', () => {
+        expect(looksBinary('text\u0000more')).toBe(true);
+    });
+
+    it('rejects dense control bytes that carry no NUL', () => {
+        // The case the NUL-only check let through: bytes 1-8 with no NUL.
+        const dense = Array.from({ length: 200 }, (_, i) => String.fromCharCode((i % 8) + 1)).join('');
+        expect(looksBinary(dense)).toBe(true);
+    });
+
+    it('accepts empty text', () => {
+        expect(looksBinary('')).toBe(false);
+    });
+});
+
+describe('the readers share the binary rule', () => {
+    beforeEach(() => {
+        vi.mocked(fs.realpath).mockImplementation((async (p: unknown) => path.resolve(String(p))) as never);
+        vi.mocked(fs.stat).mockResolvedValue({ size: 200 } as never);
+        // Dense control bytes, no NUL — passed the old NUL-only check.
+        vi.mocked(fs.readFile).mockResolvedValue(
+            Array.from({ length: 200 }, (_, i) => String.fromCharCode((i % 8) + 1)).join(''),
+        );
+    });
+
+    it('getRelatedFileContents skips it', async () => {
+        const { contents, warnings } = await getRelatedFileContents(['notes.txt'], '/repo');
+        expect(contents).toEqual({});
+        expect(warnings[0]).toContain('binary');
+    });
+
+    it('readDiagnosticsFile refuses it', async () => {
+        await expect(readDiagnosticsFile('tsc.log', '/repo')).rejects.toThrow('looks binary');
     });
 });

@@ -400,9 +400,9 @@ export async function getRelatedFileContents(
             continue;
         }
 
-        // Content-level binary check for files without a telltale extension:
-        // reject content that carries a NUL byte.
-        if (content.includes('\u0000')) {
+        // Same content-level rule getFileContents applies to the bytes on
+        // disk, run against the text already decoded here.
+        if (looksBinary(content)) {
             warnings.push(`Skipped binary related file: ${relativePath}`);
             continue;
         }
@@ -450,7 +450,14 @@ export async function readDiagnosticsFile(
     // Spends from the same budget as the changed files and the related files.
     // Diagnostics travel in the same request, so a separate 25 MB allowance
     // here is the twice-the-cap problem the shared budget exists to prevent.
-    const stat = await fs.stat(absolutePath);
+    // The file can vanish between the realpath check and the stat, and a raw
+    // ENOENT reads as a crash rather than the answer the other readers give.
+    let stat;
+    try {
+        stat = await fs.stat(absolutePath);
+    } catch {
+        throw new Error(`Diagnostics file must be a readable file within the repository. Got: ${filePath}`);
+    }
     if (!budget.canFit(stat.size)) {
         throw new Error(`Diagnostics file does not fit the remaining upload budget (${stat.size} bytes, ${budget.remaining()} left): ${filePath}`);
     }
@@ -459,7 +466,7 @@ export async function readDiagnosticsFile(
     // Content-level binary check, mirroring the related-file path: an
     // extension proves nothing, and a .log carrying NUL bytes is not the text
     // output this field is for.
-    if (content.includes('\u0000')) {
+    if (looksBinary(content)) {
         throw new Error(`Diagnostics file looks binary, expected text output: ${filePath}`);
     }
     // Re-checked against the decoded length, as the other two readers do: the
@@ -544,6 +551,28 @@ export async function checkMergeConflicts(targetBranch: string, repoRoot: string
 function isBinaryExtension(filePath: string): boolean {
     const lower = filePath.toLowerCase();
     return BINARY_EXTENSIONS.some(ext => lower.endsWith(ext));
+}
+
+/**
+ * The content-level binary test, applied to text already in memory.
+ *
+ * getFileContents sniffs the file on disk; the other two readers already hold
+ * the decoded text, and were checking only for a NUL byte. That let dense
+ * binary with no NUL through one path and not the other — the same divergence
+ * that produced every other split guard in this file. One rule, two entry
+ * points.
+ */
+export function looksBinary(text: string): boolean {
+    if (text.length === 0) return false;
+    if (text.includes('\u0000')) return true;
+
+    const sample = text.slice(0, 8192);
+    let nonText = 0;
+    for (let i = 0; i < sample.length; i++) {
+        const code = sample.charCodeAt(i);
+        if (code < 9 || (code > 13 && code < 32 && code !== 27)) nonText++;
+    }
+    return nonText / sample.length > 0.3;
 }
 
 async function isBinaryContent(filePath: string): Promise<boolean> {
