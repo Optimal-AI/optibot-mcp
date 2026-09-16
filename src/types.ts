@@ -74,14 +74,20 @@ export interface AgentReviewResponse {
     summary: string;
     /** File paths the reviewer needed but wasn't given — caller reads them locally and resubmits. */
     missingContext?: string[];
-    reviewCount: AgentReviewCountInfo;
-    isOptibotInstalled: boolean;
+    /**
+     * The three fields below are optional because every consumer already
+     * treats them that way: the renderer guards each one, the tool's output
+     * schema marks them optional, and an older or self-hosted backend may omit
+     * them. A required type here only type-checks a caller that then crashes.
+     */
+    reviewCount?: AgentReviewCountInfo;
+    isOptibotInstalled?: boolean;
     /**
      * `model`/`provider` name the model that produced the findings. The server
      * always sends both — the default model in production, or the one a dev
      * backend ran for a model override.
      */
-    meta: { mode: 'agent'; durationMs: number; model: string; provider: string };
+    meta?: { mode: 'agent'; durationMs: number; model?: string; provider?: string };
 }
 
 /**

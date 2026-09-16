@@ -397,7 +397,14 @@ export async function readDiagnosticsFile(filePath: string, repoRoot: string): P
         throw new Error(`Diagnostics file is too large to send (${stat.size} bytes, limit ${MAX_UPLOAD_BYTES}): ${filePath}`);
     }
 
-    return fs.readFile(absolutePath, 'utf-8');
+    const content = await fs.readFile(absolutePath, 'utf-8');
+    // Content-level binary check, mirroring the related-file path: an
+    // extension proves nothing, and a .log carrying NUL bytes is not the text
+    // output this field is for.
+    if (content.includes('\u0000')) {
+        throw new Error(`Diagnostics file looks binary, expected text output: ${filePath}`);
+    }
+    return content;
 }
 
 export async function getRemoteBranches(repoRoot: string): Promise<string[]> {

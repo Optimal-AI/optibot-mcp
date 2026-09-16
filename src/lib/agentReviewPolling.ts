@@ -50,6 +50,12 @@ export const DEFAULT_AGENT_POLL_INTERVAL_MS = 1000;
 export const MAX_CONSECUTIVE_NOT_FOUND = 3;
 
 /**
+ * Consecutive poll failures tolerated before the review is abandoned. A single
+ * network blip is not an outage, and the server keeps working either way.
+ */
+export const MAX_CONSECUTIVE_POLL_FAILURES = 3;
+
+/**
  * Polls for an async agent review's result until it reaches a terminal state.
  * Throws on timeout, and on a `not_found` that repeats.
  */
@@ -65,10 +71,30 @@ export async function waitForAgentReviewResult(
 
     const start = now();
     let consecutiveNotFound = 0;
+    let consecutiveErrors = 0;
 
     for (;;) {
         options.onPoll?.(Math.round((now() - start) / 1000));
-        const result = await client.getAgentReviewResult(reviewId);
+
+        // A momentary network failure on one poll must not abandon a review
+        // the server is still running and still billing. Only a run of them
+        // is treated as a real outage. Observed in practice: a single
+        // `fetch failed` against a healthy backend, where the next poll
+        // succeeded.
+        let result: AgentReviewResultResponse;
+        try {
+            result = await client.getAgentReviewResult(reviewId);
+            consecutiveErrors = 0;
+        } catch (err) {
+            consecutiveErrors++;
+            if (consecutiveErrors >= MAX_CONSECUTIVE_POLL_FAILURES) throw err;
+            if (now() - start >= timeoutMs) {
+                throw new Error('Timed out waiting for the agent review result.');
+            }
+            await sleep(intervalMs);
+            continue;
+        }
+
         if (result.status === 'done' || result.status === 'failed') {
             return result;
         }

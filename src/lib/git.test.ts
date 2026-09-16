@@ -610,6 +610,14 @@ describe('readDiagnosticsFile', () => {
         expect(fs.readFile).not.toHaveBeenCalled();
     });
 
+    it('refuses a text-named file whose content carries a NUL', async () => {
+        // An extension proves nothing: a .log full of binary is not the text
+        // output this field is for.
+        vi.mocked(fs.readFile).mockResolvedValue('tsc\u0000binary');
+
+        await expect(readDiagnosticsFile('build/tsc.log', '/repo')).rejects.toThrow('looks binary');
+    });
+
     it('refuses a file larger than the upload cap', async () => {
         vi.mocked(fs.stat).mockResolvedValue({ size: 26 * 1024 * 1024 } as never);
         await expect(readDiagnosticsFile('build/tsc.log', '/repo')).rejects.toThrow('too large to send');

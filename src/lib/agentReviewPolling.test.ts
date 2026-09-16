@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { waitForAgentReviewResult, MAX_CONSECUTIVE_NOT_FOUND } from './agentReviewPolling.js';
+import { waitForAgentReviewResult, MAX_CONSECUTIVE_NOT_FOUND, MAX_CONSECUTIVE_POLL_FAILURES } from './agentReviewPolling.js';
 
 const noSleep = () => Promise.resolve();
 
@@ -103,5 +103,51 @@ describe('waitForAgentReviewResult progress', () => {
         await expect(
             waitForAgentReviewResult(client as any, 'rev-1', { sleep: noSleep }),
         ).resolves.toBeDefined();
+    });
+});
+
+describe('waitForAgentReviewResult transient failures', () => {
+    it('survives a single failed poll and delivers the result', async () => {
+        const done = { status: 'done', result: { summary: 'ready' } };
+        const getAgentReviewResult = vi.fn()
+            .mockRejectedValueOnce(new Error('fetch failed'))
+            .mockResolvedValueOnce(done);
+
+        const result = await waitForAgentReviewResult(
+            { getAgentReviewResult } as any,
+            'rev-1',
+            { sleep: noSleep },
+        );
+
+        expect(result).toBe(done);
+        expect(getAgentReviewResult).toHaveBeenCalledTimes(2);
+    });
+
+    it('gives up once failures repeat', async () => {
+        const getAgentReviewResult = vi.fn().mockRejectedValue(new Error('ECONNRESET'));
+
+        await expect(
+            waitForAgentReviewResult({ getAgentReviewResult } as any, 'rev-1', { sleep: noSleep }),
+        ).rejects.toThrow('ECONNRESET');
+
+        expect(getAgentReviewResult).toHaveBeenCalledTimes(MAX_CONSECUTIVE_POLL_FAILURES);
+    });
+
+    it('resets the failure count after a successful poll', async () => {
+        const done = { status: 'done', result: { summary: 'ready' } };
+        const getAgentReviewResult = vi.fn()
+            .mockRejectedValueOnce(new Error('blip'))
+            .mockRejectedValueOnce(new Error('blip'))
+            .mockResolvedValueOnce({ status: 'pending' })
+            .mockRejectedValueOnce(new Error('blip'))
+            .mockResolvedValueOnce(done);
+
+        const result = await waitForAgentReviewResult(
+            { getAgentReviewResult } as any,
+            'rev-1',
+            { sleep: noSleep },
+        );
+
+        expect(result).toBe(done);
     });
 });
