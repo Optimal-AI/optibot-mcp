@@ -59,16 +59,6 @@ export function parseFileComments(fileComments: string[]): ParsedFileComment[] {
 }
 
 /**
- * True when the service reported a real daily ceiling.
- *
- * When no daily cap is configured — the default for agent reviews — the
- * service answers with Number.MAX_SAFE_INTEGER for `limit` and `remaining`
- * and 0 for `current`,
- * because it short-circuits before counting anything. Rendering that verbatim
- * produces "Reviews used: 0/9007199254740991", so the counter is omitted
- * instead: there is no quota to report.
- */
-/**
  * Wraps text in an inline code span that survives a backtick inside it.
  *
  * Markdown lets a code span use more backticks than its content contains, so
@@ -126,6 +116,15 @@ export function sanitizeAgentReviewResponse(response: AgentReviewResponse): Agen
     };
 }
 
+/**
+ * True when the service reported a real daily ceiling.
+ *
+ * When no daily cap is configured — the default for agent reviews — the
+ * service answers with Number.MAX_SAFE_INTEGER for `limit` and `remaining`
+ * and 0 for `current`, because it short-circuits before counting anything.
+ * Rendering that verbatim produces "Reviews used: 0/9007199254740991", so the
+ * counter is omitted instead: there is no quota to report.
+ */
 export function hasReviewQuota(
     rc: { current?: number; limit?: number; remaining?: number } | undefined,
 ): rc is { current: number; limit: number; remaining: number; resetAt?: string } {
