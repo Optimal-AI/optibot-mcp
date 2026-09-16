@@ -93,7 +93,10 @@ function deepSanitize<T>(value: T): T {
     if (typeof value === 'string') return sanitizeServerText(value) as unknown as T;
     if (Array.isArray(value)) return value.map((item) => deepSanitize(item)) as unknown as T;
     if (value !== null && typeof value === 'object') {
-        const out: Record<string, unknown> = {};
+        // Null-prototype: the keys come from the service, and an own
+        // `__proto__` key on a plain object would set the result's prototype.
+        // buildAgentBody guards the same way for the same reason.
+        const out: Record<string, unknown> = Object.create(null);
         for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
             out[key] = deepSanitize(item);
         }

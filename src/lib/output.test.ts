@@ -394,6 +394,13 @@ describe('sanitizeAgentReviewResponse', () => {
         expect(withExtra.futureField).toBe('latervalue');
     });
 
+    it('does not let a __proto__ key from the service set a prototype', () => {
+        const payload = JSON.parse('{"status":"looks_good","reviewPass":true,"summary":"s","findings":[],"__proto__":{"polluted":true}}');
+        const clean = sanitizeAgentReviewResponse(payload) as Record<string, unknown>;
+        expect(Object.getPrototypeOf(clean)).toBeNull();
+        expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+    });
+
     it('sanitizes reviewCount.resetAt', () => {
         const clean = sanitizeAgentReviewResponse({
             status: 'looks_good', reviewPass: true, summary: 's', findings: [],

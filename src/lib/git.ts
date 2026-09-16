@@ -462,7 +462,14 @@ export async function readDiagnosticsFile(
     if (content.includes('\u0000')) {
         throw new Error(`Diagnostics file looks binary, expected text output: ${filePath}`);
     }
-    budget.spend(Buffer.byteLength(content, 'utf-8'));
+    // Re-checked against the decoded length, as the other two readers do: the
+    // stat check used the on-disk size, and invalid UTF-8 decodes to
+    // replacement characters that are longer than the bytes they replaced.
+    const size = Buffer.byteLength(content, 'utf-8');
+    if (!budget.canFit(size)) {
+        throw new Error(`Diagnostics file does not fit the remaining upload budget (${size} bytes, ${budget.remaining()} left): ${filePath}`);
+    }
+    budget.spend(size);
     return content;
 }
 

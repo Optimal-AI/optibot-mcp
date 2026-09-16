@@ -646,6 +646,17 @@ describe('readDiagnosticsFile', () => {
         expect(fs.readFile).not.toHaveBeenCalled();
     });
 
+    it('refuses when the decoded length overruns the budget the stat size fitted', async () => {
+        // stat reports the on-disk size; invalid UTF-8 decodes to replacement
+        // characters that are longer, so the decoded length is re-checked.
+        const budget = createUploadBudget(10);
+        vi.mocked(fs.stat).mockResolvedValue({ size: 10 } as never);
+        vi.mocked(fs.readFile).mockResolvedValue('\uFFFD\uFFFD\uFFFD\uFFFD\uFFFD');
+
+        await expect(readDiagnosticsFile('a.log', '/repo', budget)).rejects.toThrow('upload budget');
+        expect(budget.remaining()).toBe(10);
+    });
+
     it('spends from the shared budget, so diagnostics cannot double the cap', async () => {
         const budget = createUploadBudget(10);
         vi.mocked(fs.stat).mockResolvedValue({ size: 10 } as never);
