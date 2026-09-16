@@ -173,12 +173,34 @@ function parseNameStatus(output: string, map: Map<string, GitChangedFile>): void
 // hundreds of MB across the wire before the backend rejects.
 const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
 
+/**
+ * One request's share of the upload cap.
+ *
+ * The changed files and the related files go up in the same request, so each
+ * keeping its own counter let a single review carry twice the cap. Pass one
+ * budget through both calls to hold the total.
+ */
+export interface UploadBudget {
+    canFit(size: number): boolean;
+    spend(size: number): void;
+    remaining(): number;
+}
+
+export function createUploadBudget(limitBytes: number = MAX_UPLOAD_BYTES): UploadBudget {
+    let spent = 0;
+    return {
+        canFit: (size: number) => spent + size <= limitBytes,
+        spend: (size: number) => { spent += size; },
+        remaining: () => Math.max(0, limitBytes - spent),
+    };
+}
+
 export async function getFileContents(
     changedFiles: GitChangedFile[],
-    repoRoot: string
+    repoRoot: string,
+    budget: UploadBudget = createUploadBudget(),
 ): Promise<Record<string, string>> {
     const contents: Record<string, string> = {};
-    let totalBytes = 0;
     let truncated = 0;
 
     for (const file of changedFiles) {
@@ -196,12 +218,12 @@ export async function getFileContents(
         try {
             const content = await fs.readFile(absolutePath, 'utf-8');
             const size = Buffer.byteLength(content, 'utf-8');
-            if (totalBytes + size > MAX_UPLOAD_BYTES) {
+            if (!budget.canFit(size)) {
                 truncated += 1;
                 continue;
             }
             contents[file.relativePath] = content;
-            totalBytes += size;
+            budget.spend(size);
         } catch {
             // Skip files we can't read
         }
@@ -275,11 +297,11 @@ function isInsideRoot(root: string, target: string): boolean {
 
 export async function getRelatedFileContents(
     relatedPaths: string[],
-    repoRoot: string
+    repoRoot: string,
+    budget: UploadBudget = createUploadBudget(),
 ): Promise<{ contents: Record<string, string>; warnings: string[] }> {
     const contents: Record<string, string> = {};
     const warnings: string[] = [];
-    let totalBytes = 0;
 
     for (const rawPath of relatedPaths) {
         const relativePath = rawPath.trim();
@@ -322,13 +344,13 @@ export async function getRelatedFileContents(
         }
 
         const size = Buffer.byteLength(content, 'utf-8');
-        if (totalBytes + size > MAX_UPLOAD_BYTES) {
+        if (!budget.canFit(size)) {
             warnings.push(`Skipped related file (upload budget exceeded): ${relativePath}`);
             continue;
         }
 
         contents[relativePath] = content;
-        totalBytes += size;
+        budget.spend(size);
     }
 
     return { contents, warnings };

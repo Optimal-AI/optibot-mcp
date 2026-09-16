@@ -29,6 +29,18 @@ vi.mock('../lib/config.js', () => ({
 }));
 
 vi.mock('../lib/git.js', () => ({
+    // createUploadBudget is a pure helper the tool threads through both file
+    // reads; a mock returning undefined would break the call rather than
+    // observe it, so the real one is used.
+    createUploadBudget: (limit?: number) => {
+        let spent = 0;
+        const cap = limit ?? 25 * 1024 * 1024;
+        return {
+            canFit: (size: number) => spent + size <= cap,
+            spend: (size: number) => { spent += size; },
+            remaining: () => Math.max(0, cap - spent),
+        };
+    },
     getRepoRoot: (...args: any[]) => mockGetRepoRoot(...args),
     getRepoName: (...args: any[]) => mockGetRepoName(...args),
     getDiffHead: (...args: any[]) => mockGetDiffHead(...args),
@@ -459,7 +471,7 @@ describe('review tools', () => {
             const handler = registeredTools.get('review_agent')!;
             const result = await handler({ relatedPaths: ['src/caller.ts'] }, mockExtra);
 
-            expect(mockGetRelatedFileContents).toHaveBeenCalledWith(['src/caller.ts'], '/repo');
+            expect(mockGetRelatedFileContents).toHaveBeenCalledWith(['src/caller.ts'], '/repo', expect.anything());
             expect(mockApiReviewAgent).toHaveBeenCalledWith(
                 expect.objectContaining({ relatedFiles: { 'src/caller.ts': 'caller source' } })
             );

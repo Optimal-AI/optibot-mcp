@@ -359,11 +359,21 @@ describe('ApiClient', () => {
             mockErrorResponse(401, { message: 'Unauthorized' });
 
             try {
-                await client.reviewAgent({ patch: 'x' });
+                await client.getAgentReviewResult('apirev_1');
                 expect.fail('should have thrown');
             } catch (err: any) {
                 expect(err.status).toBe(401);
             }
+        });
+
+        it('reports the backend error field, not just message', async () => {
+            // Every agent-mode error body uses `error`; reading only `message`
+            // dropped the actionable text.
+            mockErrorResponse(413, { error: 'The diff is too large for the review model.' });
+
+            await expect(client.getAgentReviewResult('apirev_1')).rejects.toThrow(
+                'The diff is too large for the review model.',
+            );
         });
     });
 

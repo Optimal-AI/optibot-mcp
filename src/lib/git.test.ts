@@ -25,6 +25,7 @@ import {
     detectBaseBranch,
     checkMergeConflicts,
     assertSafeRefName,
+    createUploadBudget,
 } from './git.js';
 
 const execMock = vi.mocked(exec);
@@ -699,5 +700,33 @@ describe('checkMergeConflicts', () => {
 
     it('rejects unsafe target branch names before invoking git', async () => {
         await expect(checkMergeConflicts('--exec=evil', '/repo')).rejects.toThrow('Invalid branch name');
+    });
+});
+
+describe('createUploadBudget', () => {
+    it('spends against one cap across several calls', () => {
+        const budget = createUploadBudget(100);
+        expect(budget.canFit(60)).toBe(true);
+        budget.spend(60);
+        expect(budget.remaining()).toBe(40);
+        expect(budget.canFit(60)).toBe(false);
+        expect(budget.canFit(40)).toBe(true);
+    });
+
+    it('holds the total when the changed files and the related files share it', async () => {
+        // The point of the shared budget: separately, each read could take the
+        // whole cap, so one request carried twice it.
+        const budget = createUploadBudget(10);
+        vi.mocked(fs.realpath).mockImplementation((async (p: unknown) => path.resolve(String(p))) as never);
+        vi.mocked(fs.lstat).mockResolvedValue({ isSymbolicLink: () => false } as never);
+        vi.mocked(fs.readFile).mockResolvedValue('0123456789');
+
+        mockExecFile('');
+        const first = await getRelatedFileContents(['a.ts'], '/repo', budget);
+        const second = await getRelatedFileContents(['b.ts'], '/repo', budget);
+
+        expect(Object.keys(first.contents)).toEqual(['a.ts']);
+        expect(Object.keys(second.contents)).toEqual([]);
+        expect(second.warnings.join(' ')).toContain('upload');
     });
 });

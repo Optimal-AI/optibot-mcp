@@ -234,8 +234,12 @@ export function registerReviewTools(server: McpServer): void {
                     };
                 }
 
+                // One budget across both reads: the changed files and the
+                // related files travel in the same request, so counting them
+                // separately let a review carry twice the cap.
+                const uploadBudget = git.createUploadBudget();
                 const changedFiles = await git.getChangedFiles(repoRoot);
-                const files = await git.getFileContents(changedFiles, repoRoot);
+                const files = await git.getFileContents(changedFiles, repoRoot, uploadBudget);
 
                 // Pre-attached context (W5): caller-supplied related files and
                 // local diagnostics. Both are optional; the tool stays a thin,
@@ -243,7 +247,7 @@ export function registerReviewTools(server: McpServer): void {
                 const warnings: string[] = [];
                 let relatedFiles: Record<string, string> | undefined;
                 if (relatedPaths && relatedPaths.length > 0) {
-                    const related = await git.getRelatedFileContents(relatedPaths, repoRoot);
+                    const related = await git.getRelatedFileContents(relatedPaths, repoRoot, uploadBudget);
                     warnings.push(...related.warnings);
                     if (Object.keys(related.contents).length > 0) {
                         relatedFiles = related.contents;
