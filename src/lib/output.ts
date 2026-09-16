@@ -200,7 +200,10 @@ function formatFinding(finding: AgentReviewFinding, index: number): string[] {
 
     lines.push(`### ${index}. [${sev} · ${sanitizeServerText(finding.category)}] ${loc}${patchNote}`);
     lines.push('');
-    lines.push(`- **id:** \`${sanitizeServerText(finding.id)}\``);
+    // Same reasoning as the missingContext paths: the id is derived from the
+    // reviewer's own wording, which quotes the code under review, so it can
+    // carry a backtick that would close the span early.
+    lines.push(`- **id:** ${inlineCode(sanitizeServerText(String(finding.id ?? '')))}`);
     lines.push(`- **confidence:** ${finding.confidence}/10`);
     lines.push('');
     lines.push(sanitizeServerText(finding.message));

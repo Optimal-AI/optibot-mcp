@@ -213,19 +213,21 @@ export async function getFileContents(
 
         const absolutePath = path.join(repoRoot, file.relativePath);
 
-        if (await isBinaryFile(absolutePath)) continue;
-
         try {
             // Size from the directory entry first, like the related-file path:
-            // a changed file that cannot fit the budget should not be pulled
-            // into memory just to be discarded. A single huge text file in the
-            // working tree would otherwise spike this long-lived server's
-            // memory, taking down every other tool call in the host session.
+            // a changed file that cannot fit the budget should not be opened at
+            // all. A single huge text file in the working tree would otherwise
+            // spike this long-lived server's memory, taking down every other
+            // tool call in the host session. This runs before the binary sniff,
+            // which itself opens the file and reads its first bytes.
             const stat = await fs.stat(absolutePath);
             if (!budget.canFit(stat.size)) {
                 truncated += 1;
                 continue;
             }
+
+            if (await isBinaryFile(absolutePath)) continue;
+
             const content = await fs.readFile(absolutePath, 'utf-8');
             const size = Buffer.byteLength(content, 'utf-8');
             if (!budget.canFit(size)) {

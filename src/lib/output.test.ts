@@ -308,6 +308,21 @@ describe('missingContext rendering', () => {
         expect(withMissing(['src/db.ts'])).toContain('`src/db.ts`');
     });
 
+    it('keeps a finding id containing a backtick inside its code span', () => {
+        const out = formatAgentReview({
+            status: 'needs_changes',
+            reviewPass: false,
+            summary: 's',
+            findings: [{
+                id: 'AF-`evil', file: 'a.ts', startLine: 1, endLine: 1, inPatch: true,
+                severity: 'blocker', category: 'bug', message: 'm', confidence: 9,
+            }],
+        } as never);
+        // One backtick in the text, so the fence widens to two.
+        expect(out).toContain('- **id:** ``AF-`evil``');
+        expect(out).not.toContain('- **id:** `AF-`evil`');
+    });
+
     it('keeps a path containing a backtick inside its code span', () => {
         // sanitizeServerText strips control characters, not markdown, so a
         // backtick in a server-supplied path would otherwise close the span.
