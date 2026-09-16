@@ -267,6 +267,93 @@ describe('ApiClient', () => {
             mockErrorResponse(429, { message: 'Agent review limit reached' });
             await expect(client.reviewAgent({ patch: 'x' })).rejects.toThrow('Agent review limit reached');
         });
+    });
+
+    describe('submitAgentReview', () => {
+        it('sends async:true and reports a 202 as accepted', async () => {
+            fetchMock.mockResolvedValue({
+                ok: true,
+                status: 202,
+                json: () => Promise.resolve({ reviewId: 'apirev_1', reviewCount: { current: 1, limit: 50, remaining: 49 } }),
+            });
+
+            const submission = await client.submitAgentReview({ patch: 'diff' });
+
+            const callBody = JSON.parse(fetchMock.mock.calls[0][1].body);
+            expect(callBody.async).toBe(true);
+            expect(callBody.patch).toBe(Buffer.from('diff').toString('base64'));
+            expect(submission).toEqual({
+                kind: 'accepted',
+                reviewId: 'apirev_1',
+                reviewCount: { current: 1, limit: 50, remaining: 49 },
+            });
+        });
+
+        it('reports an inline 200 as completed, so an older backend still works', async () => {
+            fetchMock.mockResolvedValue({
+                ok: true,
+                status: 200,
+                json: () => Promise.resolve({ status: 'looks_good', reviewPass: true, findings: [], summary: 's' }),
+            });
+
+            const submission = await client.submitAgentReview({ patch: 'diff' });
+
+            expect(submission.kind).toBe('completed');
+            expect(submission).toHaveProperty('review.status', 'looks_good');
+        });
+
+        it('base64-encodes related files and sends diagnostics as plain text', async () => {
+            fetchMock.mockResolvedValue({ ok: true, status: 202, json: () => Promise.resolve({ reviewId: 'r' }) });
+
+            await client.submitAgentReview({
+                patch: 'x',
+                relatedFiles: { 'b.ts': 'related' },
+                localDiagnostics: 'tsc: error TS2304',
+            });
+
+            const callBody = JSON.parse(fetchMock.mock.calls[0][1].body);
+            expect(callBody.relatedFiles['b.ts']).toBe(Buffer.from('related').toString('base64'));
+            expect(callBody.localDiagnostics).toBe('tsc: error TS2304');
+        });
+
+        it('throws on an error response', async () => {
+            mockErrorResponse(429, { message: 'Agent review limit reached' });
+            await expect(client.submitAgentReview({ patch: 'x' })).rejects.toThrow('Agent review limit reached');
+        });
+    });
+
+    describe('getAgentReviewResult', () => {
+        it('GETs the result endpoint with the id encoded', async () => {
+            fetchMock.mockResolvedValue({ ok: true, status: 200, json: () => Promise.resolve({ status: 'pending' }) });
+
+            const result = await client.getAgentReviewResult('apirev/1');
+
+            expect(fetchMock).toHaveBeenCalledWith(
+                'http://test-api.local/api/review/agent/result/apirev%2F1',
+                expect.objectContaining({ method: 'GET' }),
+            );
+            expect(result).toEqual({ status: 'pending' });
+        });
+
+        it('maps a 404 to not_found instead of throwing', async () => {
+            fetchMock.mockResolvedValue({ ok: false, status: 404, json: () => Promise.resolve({ status: 'not_found' }) });
+
+            await expect(client.getAgentReviewResult('apirev_1')).resolves.toEqual({ status: 'not_found' });
+        });
+
+        it('returns a failed envelope with its errorType', async () => {
+            fetchMock.mockResolvedValue({
+                ok: true,
+                status: 200,
+                json: () => Promise.resolve({ status: 'failed', error: 'too big', errorType: 'context_window_exceeded' }),
+            });
+
+            await expect(client.getAgentReviewResult('apirev_1')).resolves.toEqual({
+                status: 'failed',
+                error: 'too big',
+                errorType: 'context_window_exceeded',
+            });
+        });
 
         it('attaches status to the thrown error', async () => {
             mockErrorResponse(401, { message: 'Unauthorized' });

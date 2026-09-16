@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.6.0] - 2026-09-16
+
+### Added
+
+- New `review_agent` tool: an agent-mode review of uncommitted local changes for a coding-agent host that already holds the working copy. It returns structured findings (severity, category, confidence, file and line range), a summary, and an overall pass/fail, and runs no server-side tools. Pass `relatedPaths` to attach context files the diff does not include, and `diagnosticsPath` to attach a local `tsc` or `eslint` run. When a review reports missing context, call the tool again with those paths in `relatedPaths`.
+- The review is submitted and then polled for, so no single request has to stay open for the whole review. A backend without the async path answers inline and the tool handles that with no configuration.
+- A review that cannot finish now says which of two things happened — the diff was too large for the reviewer to read, or the service stopped a review that ran too long — instead of passing the server's error text through.
+
+### Changed
+
+- Finding ids are documented as labels within one response rather than as stable keys. The service derives an id from the reviewer's wording and the reviewer rephrases itself on every call, so the same defect returns a different id on the next run. Match a finding on its file, line range, and category instead.
+- `review_agent` no longer asks the host to classify findings as signal or noise. The Optibot skill dropped that self-report, and the two hosts now say the same thing about the same review.
+- The MCP registry manifest (`server.json`) had been left at 1.4.1 while the package was at 1.5.0. Both now carry the package version.
+
 ## [1.5.0] - 2026-08-12
 
 ### Changed

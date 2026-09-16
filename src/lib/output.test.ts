@@ -370,19 +370,11 @@ describe('formatAgentReview', () => {
         expect(out).toContain('1/1');
     });
 
-    it('includes the signal-vs-noise classification rubric when there are findings', () => {
+    it('does not ask the host to classify findings as signal or noise', () => {
         const out = formatAgentReview(makeResponse());
-        expect(out).toContain('Signal vs noise');
-        expect(out).toContain('real issue');
-        expect(out).toContain('valid suggestion');
-        expect(out).toContain('Noise');
-        expect(out).toContain('Signal-to-noise ratio');
-        expect(out).toContain('| # | id | file:line | severity | verdict | why |');
-    });
-
-    it('omits the signal/noise rubric when there are no findings', () => {
-        const out = formatAgentReview(makeResponse({ findings: [], summary: '' }));
         expect(out).not.toContain('Signal vs noise');
+        expect(out).not.toContain('Signal-to-noise ratio');
+        expect(out).not.toContain('| # | id | file:line | severity | verdict | why |');
     });
 
     it('lists missingContext with a re-run note', () => {

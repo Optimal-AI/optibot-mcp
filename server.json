@@ -4,13 +4,13 @@
   "title": "Optibot",
   "description": "AI code review for your AI assistant — review local changes, branch diffs, and patch files.",
   "websiteUrl": "https://getoptimal.ai",
-  "version": "1.4.1",
+  "version": "1.6.0",
   "packages": [
     {
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "@optimalai/optibot-mcp",
-      "version": "1.4.1",
+      "version": "1.6.0",
       "transport": {
         "type": "stdio"
       },

@@ -39,7 +39,12 @@ export type FindingCategory =
     | 'other';
 
 export interface AgentReviewFinding {
-    /** Stable across iterations: hash of file + category + normalized message (NOT line numbers). */
+    /**
+     * Identifies this finding within this response only. The server hashes the
+     * reviewer's message into it and the reviewer runs at a non-zero
+     * temperature, so two identical requests return different ids for the same
+     * defect. Do not use it to match a finding across rounds or runs.
+     */
     id: string;
     file: string;
     startLine: number;
@@ -71,8 +76,42 @@ export interface AgentReviewResponse {
     missingContext?: string[];
     reviewCount: AgentReviewCountInfo;
     isOptibotInstalled: boolean;
-    meta: { mode: 'agent'; durationMs: number; model?: string; provider?: string };
+    /**
+     * `model`/`provider` name the model that produced the findings. The server
+     * always sends both — the default model in production, or the one a dev
+     * backend ran for a model override.
+     */
+    meta: { mode: 'agent'; durationMs: number; model: string; provider: string };
 }
+
+/**
+ * Outcome of submitting an agent review with `async: true`. A backend with the
+ * async path answers 202 with a reviewId to poll ('accepted'); one without it
+ * ignores the unknown field, runs the review inline, and answers 200 with the
+ * finished review ('completed').
+ */
+export type AgentReviewSubmission =
+    | { kind: 'completed'; review: AgentReviewResponse }
+    | { kind: 'accepted'; reviewId: string; reviewCount?: AgentReviewCountInfo };
+
+/**
+ * Machine-readable failure kinds on the async result endpoint. The server names
+ * the kinds it can distinguish and omits the field for everything else, so a
+ * client branches on the ones it knows and treats an absent or unknown value as
+ * a generic failure.
+ */
+export type AgentReviewErrorType = 'context_window_exceeded' | 'timeout';
+
+/**
+ * Response of GET /api/review/agent/result/:reviewId. Unlike the full-mode
+ * result endpoint, a finished review is nested under `result` rather than
+ * spread onto the envelope, because the review carries its own `status`.
+ */
+export type AgentReviewResultResponse =
+    | { status: 'pending' }
+    | { status: 'not_found' }
+    | { status: 'failed'; error?: string; errorType?: AgentReviewErrorType | string }
+    | { status: 'done'; result: AgentReviewResponse };
 
 export interface AgentReviewRequest {
     patch: string;

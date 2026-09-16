@@ -1,6 +1,8 @@
 import {
     ReviewResponse,
     AgentReviewResponse,
+    AgentReviewSubmission,
+    AgentReviewResultResponse,
     ApiKeyCreateResponse,
     ApiKeyListItem,
     ApiKeyListResponse,
@@ -106,13 +108,18 @@ export class ApiClient {
         return result;
     }
 
-    async reviewAgent(params: {
+    /**
+     * Builds the agent-mode request body. `patch`, `files`, and `relatedFiles`
+     * are base64-encoded; `localDiagnostics` is sent as plain text, per the
+     * backend contract.
+     */
+    private buildAgentBody(params: {
         patch: string;
         repositoryName?: string;
         files?: Record<string, string>;
         relatedFiles?: Record<string, string>;
         localDiagnostics?: string;
-    }): Promise<AgentReviewResponse> {
+    }): Record<string, unknown> {
         const patchBase64 = Buffer.from(params.patch, 'utf-8').toString('base64');
 
         const body: Record<string, unknown> = { patch: patchBase64 };
@@ -145,6 +152,56 @@ export class ApiClient {
             body.localDiagnostics = params.localDiagnostics;
         }
 
+        return body;
+    }
+
+    /**
+     * Runs an agent-mode review over a single synchronous request. Kept as the
+     * fallback path: a review can run for minutes server-side, which is longer
+     * than a proxy will hold a request open, so submitAgentReview is what the
+     * tools use.
+     */
+    async reviewAgent(params: {
+        patch: string;
+        repositoryName?: string;
+        files?: Record<string, string>;
+        relatedFiles?: Record<string, string>;
+        localDiagnostics?: string;
+    }): Promise<AgentReviewResponse> {
+        const response = await fetch(`${API_BASE_URL}/api/review/agent`, {
+            method: 'POST',
+            headers: {
+                ...CLIENT_HEADERS,
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${this.apiKey}`,
+            },
+            body: JSON.stringify(this.buildAgentBody(params)),
+        });
+
+        if (!response.ok) {
+            await this.throwApiError(response);
+        }
+
+        // Agent-mode response is native JSON — no base64 decode pass.
+        return await response.json() as AgentReviewResponse;
+    }
+
+    /**
+     * Submits an agent review with `async: true`. A backend with the async path
+     * answers 202 with a reviewId to poll; one without it ignores the field and
+     * answers 200 with the finished review, which is reported as 'completed' so
+     * the caller needs no version check.
+     */
+    async submitAgentReview(params: {
+        patch: string;
+        repositoryName?: string;
+        files?: Record<string, string>;
+        relatedFiles?: Record<string, string>;
+        localDiagnostics?: string;
+    }): Promise<AgentReviewSubmission> {
+        const body = this.buildAgentBody(params);
+        body.async = true;
+
         const response = await fetch(`${API_BASE_URL}/api/review/agent`, {
             method: 'POST',
             headers: {
@@ -159,8 +216,43 @@ export class ApiClient {
             await this.throwApiError(response);
         }
 
-        // Agent-mode response is native JSON — no base64 decode pass.
-        return await response.json() as AgentReviewResponse;
+        if (response.status === 202) {
+            const accepted = await response.json() as {
+                reviewId: string;
+                reviewCount?: AgentReviewResponse['reviewCount'];
+            };
+            return { kind: 'accepted', reviewId: accepted.reviewId, reviewCount: accepted.reviewCount };
+        }
+
+        return { kind: 'completed', review: await response.json() as AgentReviewResponse };
+    }
+
+    /**
+     * Fetches the result of an async agent review. A 404 maps to `not_found`
+     * (unknown or expired reviewId) rather than throwing, because a poll issued
+     * immediately after the submit can race the job becoming visible.
+     */
+    async getAgentReviewResult(reviewId: string): Promise<AgentReviewResultResponse> {
+        const response = await fetch(
+            `${API_BASE_URL}/api/review/agent/result/${encodeURIComponent(reviewId)}`,
+            {
+                method: 'GET',
+                headers: {
+                    ...CLIENT_HEADERS,
+                    'Authorization': `Bearer ${this.apiKey}`,
+                },
+            },
+        );
+
+        if (response.status === 404) {
+            return { status: 'not_found' };
+        }
+
+        if (!response.ok) {
+            await this.throwApiError(response);
+        }
+
+        return await response.json() as AgentReviewResultResponse;
     }
 
     async createApiKey(name: string): Promise<ApiKeyCreateResponse> {

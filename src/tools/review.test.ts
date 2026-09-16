@@ -19,6 +19,8 @@ const mockFormatAgentReview = vi.fn();
 const mockFormatError = vi.fn();
 const mockApiReview = vi.fn();
 const mockApiReviewAgent = vi.fn();
+const mockApiSubmitAgentReview = vi.fn();
+const mockApiGetAgentReviewResult = vi.fn();
 const mockStartSession = vi.fn();
 const mockEndSession = vi.fn();
 
@@ -44,6 +46,8 @@ vi.mock('../lib/api.js', () => ({
     ApiClient: class {
         review(...args: any[]) { return mockApiReview(...args); }
         reviewAgent(...args: any[]) { return mockApiReviewAgent(...args); }
+        submitAgentReview(...args: any[]) { return mockApiSubmitAgentReview(...args); }
+        getAgentReviewResult(...args: any[]) { return mockApiGetAgentReviewResult(...args); }
     },
 }));
 
@@ -91,6 +95,15 @@ describe('review tools', () => {
 
     beforeEach(() => {
         mockStartSession.mockResolvedValue('session-id-123');
+        // The tool submits with async:true. A backend without the async path
+        // answers inline, so defaulting to the 'completed' shape keeps every
+        // existing agent test observing the same params through
+        // mockApiReviewAgent; the async describe overrides this.
+        mockApiSubmitAgentReview.mockReset().mockImplementation(async (params: unknown) => ({
+            kind: 'completed',
+            review: await mockApiReviewAgent(params),
+        }));
+        mockApiGetAgentReviewResult.mockReset();
     });
 
     describe('review_local_changes', () => {
@@ -191,6 +204,95 @@ describe('review tools', () => {
             expect(mockApiReviewAgent).toHaveBeenCalledWith(
                 expect.objectContaining({ patch: 'diff content', repositoryName: 'my-repo', files: { 'a.ts': 'contents' } })
             );
+        });
+
+        it('polls for the result when the backend accepts the review (202)', async () => {
+            mockReadConfig.mockResolvedValue({ apiKey: 'key' });
+            mockGetRepoRoot.mockResolvedValue('/repo');
+            mockGetRepoName.mockResolvedValue('my-repo');
+            mockGetDiffHead.mockResolvedValue('diff content');
+            mockGetChangedFiles.mockResolvedValue([]);
+            mockGetFileContents.mockResolvedValue({});
+            mockApiSubmitAgentReview.mockResolvedValue({ kind: 'accepted', reviewId: 'apirev_1' });
+            mockApiGetAgentReviewResult
+                .mockResolvedValueOnce({ status: 'pending' })
+                .mockResolvedValueOnce({ status: 'done', result: { status: 'looks_good', findings: [] } });
+            mockFormatAgentReview.mockReturnValue('Agent review output');
+
+            const handler = registeredTools.get('review_agent')!;
+            const result = await handler(mockExtra);
+
+            expect(mockApiGetAgentReviewResult).toHaveBeenCalledWith('apirev_1');
+            expect(mockFormatAgentReview).toHaveBeenCalledWith(
+                expect.objectContaining({ status: 'looks_good' }),
+            );
+            expect(result.content[0].text).toBe('Agent review output');
+            expect(result.isError).toBeUndefined();
+        });
+
+        it('backfills the quota snapshot from the 202 when the result carries none', async () => {
+            mockReadConfig.mockResolvedValue({ apiKey: 'key' });
+            mockGetRepoRoot.mockResolvedValue('/repo');
+            mockGetRepoName.mockResolvedValue('my-repo');
+            mockGetDiffHead.mockResolvedValue('diff content');
+            mockGetChangedFiles.mockResolvedValue([]);
+            mockGetFileContents.mockResolvedValue({});
+            const reviewCount = { current: 3, limit: 50, remaining: 47 };
+            mockApiSubmitAgentReview.mockResolvedValue({ kind: 'accepted', reviewId: 'apirev_1', reviewCount });
+            mockApiGetAgentReviewResult.mockResolvedValue({
+                status: 'done',
+                result: { status: 'looks_good', findings: [] },
+            });
+            mockFormatAgentReview.mockReturnValue('out');
+
+            const handler = registeredTools.get('review_agent')!;
+            await handler(mockExtra);
+
+            expect(mockFormatAgentReview).toHaveBeenCalledWith(expect.objectContaining({ reviewCount }));
+        });
+
+        it('tells the host a diff was too large instead of passing the raw error through', async () => {
+            mockReadConfig.mockResolvedValue({ apiKey: 'key' });
+            mockGetRepoRoot.mockResolvedValue('/repo');
+            mockGetRepoName.mockResolvedValue('my-repo');
+            mockGetDiffHead.mockResolvedValue('diff content');
+            mockGetChangedFiles.mockResolvedValue([]);
+            mockGetFileContents.mockResolvedValue({});
+            mockApiSubmitAgentReview.mockResolvedValue({ kind: 'accepted', reviewId: 'apirev_1' });
+            mockApiGetAgentReviewResult.mockResolvedValue({
+                status: 'failed',
+                error: 'sanitized text',
+                errorType: 'context_window_exceeded',
+            });
+            mockFormatError.mockImplementation((err: any) => err.message);
+
+            const handler = registeredTools.get('review_agent')!;
+            const result = await handler(mockExtra);
+
+            expect(result.isError).toBe(true);
+            expect(result.content[0].text).toContain('too large');
+        });
+
+        it('tells the host the server stopped a long-running review', async () => {
+            mockReadConfig.mockResolvedValue({ apiKey: 'key' });
+            mockGetRepoRoot.mockResolvedValue('/repo');
+            mockGetRepoName.mockResolvedValue('my-repo');
+            mockGetDiffHead.mockResolvedValue('diff content');
+            mockGetChangedFiles.mockResolvedValue([]);
+            mockGetFileContents.mockResolvedValue({});
+            mockApiSubmitAgentReview.mockResolvedValue({ kind: 'accepted', reviewId: 'apirev_1' });
+            mockApiGetAgentReviewResult.mockResolvedValue({
+                status: 'failed',
+                error: 'sanitized text',
+                errorType: 'timeout',
+            });
+            mockFormatError.mockImplementation((err: any) => err.message);
+
+            const handler = registeredTools.get('review_agent')!;
+            const result = await handler(mockExtra);
+
+            expect(result.isError).toBe(true);
+            expect(result.content[0].text).toContain('ran too long');
         });
 
         it('returns "No changes" when diff is empty', async () => {

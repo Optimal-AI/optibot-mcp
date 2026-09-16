@@ -141,11 +141,10 @@ function formatFinding(finding: AgentReviewFinding, index: number): string[] {
 /**
  * Render an agent-mode review as readable markdown for a coding-agent host.
  *
- * The MCP cannot itself judge whether a finding is signal or noise — that
- * requires opening the cited lines, which only the host holding the working
- * copy can do. So this renders a structural severity breakdown (at-a-glance),
- * lists every finding with a stable id, and hands the host the signal/noise
- * rubric with instructions to classify each finding and print the final bar.
+ * This renders a structural severity breakdown for an at-a-glance read, then
+ * every finding. It does not ask the host to classify the findings as signal or
+ * noise: the production skill dropped that self-report, and the two hosts say
+ * the same thing about the same review.
  */
 export function formatAgentReview(response: AgentReviewResponse): string {
     const lines: string[] = [];
@@ -189,7 +188,7 @@ export function formatAgentReview(response: AgentReviewResponse): string {
     lines.push('');
 
     if (total === 0) {
-        lines.push('No findings. Nothing to classify.');
+        lines.push('No findings.');
     } else {
         lines.push('### Findings');
         lines.push('');
@@ -197,32 +196,6 @@ export function formatAgentReview(response: AgentReviewResponse): string {
             lines.push(...formatFinding(finding, i + 1));
         });
 
-        // Signal/noise self-assessment: the host classifies, not the MCP.
-        lines.push('---');
-        lines.push('');
-        lines.push('### Signal vs noise — classify before you act');
-        lines.push('');
-        lines.push('You hold the working copy, so you are the judge. Open the cited lines for **each** finding above and label it as exactly one of:');
-        lines.push('');
-        lines.push('- 🐞 **Signal · real issue** — a genuine bug, security, correctness, or performance problem, confirmed by reading the cited lines.');
-        lines.push('- 💡 **Signal · valid suggestion** — technically sound and actionable, even if not a bug.');
-        lines.push('- ✗ **Noise** — incorrect, hallucinated, misreads the code, not actionable, duplicate, or bikeshedding.');
-        lines.push('');
-        lines.push('Discipline: open the cited lines before labeling; when genuinely unsure, label **Noise** (precision matters more than recall here). Then fill this in:');
-        lines.push('');
-        lines.push('```');
-        lines.push(`Signal ▓▓▓▓░░░░░░  __%   _/${total}`);
-        lines.push('   🐞 real issues        _');
-        lines.push('   💡 valid suggestions  _');
-        lines.push(`Noise  ▓▓▓▓░░░░░░  __%   _/${total}`);
-        lines.push('');
-        lines.push('Signal-to-noise ratio: _ : 1   (industry trust threshold ≈ 5:1)');
-        lines.push('```');
-        lines.push('');
-        lines.push('Then a per-finding table so the classification is auditable:');
-        lines.push('');
-        lines.push('| # | id | file:line | severity | verdict | why |');
-        lines.push('|---|----|-----------|----------|---------|-----|');
     }
 
     if (response.missingContext && response.missingContext.length > 0) {

@@ -6,6 +6,8 @@ import { ApiClient } from '../lib/api.js';
 import { formatReview, formatAgentReview, formatError } from '../lib/output.js';
 import { ReviewProgressService, ReviewProgressEvent } from '../lib/reviewProgress.js';
 import { safeSendLog } from '../lib/notify.js';
+import { waitForAgentReviewResult } from '../lib/agentReviewPolling.js';
+import { AgentReviewResponse } from '../types.js';
 
 const ReviewBranchSchema = {
     branch: z.string().optional().describe('Target branch to compare against. If omitted, auto-detects origin/main, origin/master, or origin/develop.'),
@@ -23,6 +25,52 @@ const ReviewAgentSchema = {
         'Repo-relative path to a local tsc/eslint/LSP output file. Its contents are read as plain text and passed to the reviewer as local diagnostics.'
     ),
 };
+
+/** What runAgentReview needs from an ApiClient; the real client satisfies it. */
+type AgentReviewRunner = Pick<ApiClient, 'submitAgentReview' | 'getAgentReviewResult'>;
+
+/**
+ * Runs one agent review over the async path: submit, then poll for the result.
+ * A backend without that path answers the submit inline, which arrives as
+ * 'completed' and needs no polling.
+ *
+ * A failed result carries `errorType` naming the kinds the server can tell
+ * apart, so the host is told which of them happened rather than being handed
+ * text the server documents as unparseable.
+ */
+export async function runAgentReview(
+    client: AgentReviewRunner,
+    params: {
+        patch: string;
+        repositoryName?: string;
+        files?: Record<string, string>;
+        relatedFiles?: Record<string, string>;
+        localDiagnostics?: string;
+    },
+): Promise<AgentReviewResponse> {
+    const submission = await client.submitAgentReview(params);
+    if (submission.kind === 'completed') {
+        return submission.review;
+    }
+
+    const result = await waitForAgentReviewResult(client, submission.reviewId);
+    if (result.status === 'done') {
+        // A 202 carries the quota snapshot; a result payload may not, so the
+        // snapshot backfills it rather than leaving the host without one.
+        if (!result.result.reviewCount && submission.reviewCount) {
+            return { ...result.result, reviewCount: submission.reviewCount };
+        }
+        return result.result;
+    }
+
+    if (result.errorType === 'context_window_exceeded') {
+        throw new Error('The diff is too large for agent review mode. Review a smaller set of changes, or use the full review tools, which handle larger diffs.');
+    }
+    if (result.errorType === 'timeout') {
+        throw new Error('The agent review ran too long and the server stopped it. Run it again, or review a smaller set of changes.');
+    }
+    throw new Error(result.error || 'The agent review failed.');
+}
 
 export function formatProgressStep(event: ReviewProgressEvent): string {
     const prefix = '[progress]';
@@ -84,13 +132,14 @@ export function registerReviewTools(server: McpServer): void {
 
     // Tool: review_agent
     // Agent-mode review of uncommitted local changes. Unlike the full-mode
-    // tools, this returns STRUCTURED findings (severity/category/confidence,
-    // stable ids) as native JSON in a single synchronous pass — the server
-    // runs no tools, so the caller front-loads the changed files. Designed for
-    // a coding-agent host that can act on findings and re-run with more context.
+    // tools, this returns STRUCTURED findings (severity/category/confidence)
+    // as native JSON — the server runs no tools, so the caller front-loads the
+    // changed files. Designed for a coding-agent host that can act on findings
+    // and re-run with more context. The review is submitted and then polled,
+    // so no single HTTP request has to stay open for the whole review.
     (server.tool as any)(
         'review_agent',
-        'Agent-mode code review of uncommitted local changes (git diff HEAD). Returns structured findings (severity, category, confidence, stable ids) plus a signal-vs-noise rubric for the host to classify. Single synchronous pass, no server-side tools. Prefer this when a coding agent holds the working copy and will act on the findings. Optionally pass `relatedPaths` (extra context files beyond the diff) and `diagnosticsPath` (a local tsc/eslint output file). When a run reports "Missing context", re-call this tool with those paths in `relatedPaths`.',
+        'Agent-mode code review of uncommitted local changes (git diff HEAD). Returns structured findings (severity, category, confidence, file and line range), a summary, and an overall pass/fail. No server-side tools run. Prefer this when a coding agent holds the working copy and will act on the findings. Optionally pass `relatedPaths` (extra context files beyond the diff) and `diagnosticsPath` (a local tsc/eslint output file). When a run reports "Missing context", re-call this tool with those paths in `relatedPaths`. Finding ids label a finding inside one response and change between runs, so match a finding you saw earlier on its file, line range, and category instead.',
         ReviewAgentSchema,
         async ({ relatedPaths, diagnosticsPath }: { relatedPaths?: string[]; diagnosticsPath?: string }, _extra: any) => {
             try {
@@ -134,7 +183,13 @@ export function registerReviewTools(server: McpServer): void {
                 }
 
                 const client = new ApiClient(config.apiKey);
-                const response = await client.reviewAgent({ patch, repositoryName: repoName, files, relatedFiles, localDiagnostics });
+                const response = await runAgentReview(client, {
+                    patch,
+                    repositoryName: repoName,
+                    files,
+                    relatedFiles,
+                    localDiagnostics,
+                });
 
                 let text = formatAgentReview(response);
                 if (warnings.length > 0) {
