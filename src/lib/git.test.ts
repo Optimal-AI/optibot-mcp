@@ -407,6 +407,9 @@ describe('getFileContents', () => {
 describe('getRelatedFileContents', () => {
     beforeEach(() => {
         vi.mocked(fs.readFile).mockReset();
+        // The budget is checked from the directory entry before the read, so
+        // stat has to answer for every candidate.
+        vi.mocked(fs.stat).mockResolvedValue({ size: 1024 } as never);
         // Containment resolves both the root and the candidate through
         // realpath. Default to a lexical resolution so the tests behave like
         // paths with no symlinks; the symlink test overrides this.
@@ -467,6 +470,16 @@ describe('getRelatedFileContents', () => {
 
         expect(contents).toEqual({});
         expect(warnings).toHaveLength(2);
+        expect(fs.readFile).not.toHaveBeenCalled();
+    });
+
+    it('skips an oversized file without reading it into memory', async () => {
+        vi.mocked(fs.stat).mockResolvedValue({ size: 26 * 1024 * 1024 } as never);
+
+        const { contents, warnings } = await getRelatedFileContents(['big.log'], '/repo');
+
+        expect(contents).toEqual({});
+        expect(warnings[0]).toContain('upload budget');
         expect(fs.readFile).not.toHaveBeenCalled();
     });
 
@@ -759,6 +772,7 @@ describe('createUploadBudget', () => {
         const budget = createUploadBudget(10);
         vi.mocked(fs.realpath).mockImplementation((async (p: unknown) => path.resolve(String(p))) as never);
         vi.mocked(fs.lstat).mockResolvedValue({ isSymbolicLink: () => false } as never);
+        vi.mocked(fs.stat).mockResolvedValue({ size: 10 } as never);
         vi.mocked(fs.readFile).mockResolvedValue('0123456789');
 
         mockExecFile('');

@@ -73,6 +73,7 @@ vi.mock('../lib/output.js', async (importOriginal) => {
         formatAgentReview: (...args: any[]) => mockFormatAgentReview(...args),
         formatError: (...args: any[]) => mockFormatError(...args),
         hasReviewQuota: actual.hasReviewQuota,
+        sanitizeServerText: actual.sanitizeServerText,
     };
 });
 

@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { readConfig } from '../lib/config.js';
 import * as git from '../lib/git.js';
 import { ApiClient } from '../lib/api.js';
-import { formatReview, formatAgentReview, formatError, hasReviewQuota } from '../lib/output.js';
+import { formatReview, formatAgentReview, formatError, hasReviewQuota, sanitizeServerText } from '../lib/output.js';
 import { ReviewProgressService, ReviewProgressEvent } from '../lib/reviewProgress.js';
 import { safeSendLog, ToolExtraLike } from '../lib/notify.js';
 import { waitForAgentReviewResult } from '../lib/agentReviewPolling.js';
@@ -248,7 +248,10 @@ export function registerReviewTools(server: McpServer): void {
                 let relatedFiles: Record<string, string> | undefined;
                 if (relatedPaths && relatedPaths.length > 0) {
                     const related = await git.getRelatedFileContents(relatedPaths, repoRoot, uploadBudget);
-                    warnings.push(...related.warnings);
+                    // These carry the caller's own paths; strip control
+                    // characters before they reach the rendered text or the
+                    // structured warnings array.
+                    warnings.push(...related.warnings.map((w) => sanitizeServerText(w)));
                     if (Object.keys(related.contents).length > 0) {
                         relatedFiles = related.contents;
                     }
@@ -263,7 +266,7 @@ export function registerReviewTools(server: McpServer): void {
                         }
                     } catch (err) {
                         const reason = err instanceof Error ? err.message : String(err);
-                        warnings.push(`Could not read diagnostics file "${diagnosticsPath}": ${reason}`);
+                        warnings.push(sanitizeServerText(`Could not read diagnostics file "${diagnosticsPath}": ${reason}`));
                     }
                 }
 

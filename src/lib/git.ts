@@ -333,6 +333,21 @@ export async function getRelatedFileContents(
             continue;
         }
 
+        // Size first, from the directory entry: a file that cannot fit the
+        // budget should never be pulled into memory just to be discarded.
+        // Buffer.byteLength on the decoded text is still the figure that is
+        // spent, since that is what actually goes over the wire.
+        try {
+            const stat = await fs.stat(absolutePath);
+            if (!budget.canFit(stat.size)) {
+                warnings.push(`Skipped related file (upload budget exceeded): ${relativePath}`);
+                continue;
+            }
+        } catch {
+            warnings.push(`Could not read related file: ${relativePath}`);
+            continue;
+        }
+
         let content: string;
         try {
             content = await fs.readFile(absolutePath, 'utf-8');
