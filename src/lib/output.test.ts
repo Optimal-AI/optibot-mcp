@@ -384,6 +384,24 @@ describe('sanitizeAgentReviewResponse', () => {
         expect(clean.reviewPass).toBe(false);
     });
 
+    it('sanitizes a field the client does not know about', () => {
+        // The service is a separate codebase: a string field added there before
+        // this client's types catch up must still be cleaned.
+        const withExtra = sanitizeAgentReviewResponse({
+            status: 'looks_good', reviewPass: true, summary: 's', findings: [],
+            futureField: `later${ESC}[2Jvalue`,
+        } as never) as Record<string, unknown>;
+        expect(withExtra.futureField).toBe('latervalue');
+    });
+
+    it('sanitizes reviewCount.resetAt', () => {
+        const clean = sanitizeAgentReviewResponse({
+            status: 'looks_good', reviewPass: true, summary: 's', findings: [],
+            reviewCount: { current: 1, limit: 5, remaining: 4, resetAt: `2026${ESC}[2J-01-01` },
+        } as never);
+        expect(clean.reviewCount!.resetAt).not.toContain(ESC);
+    });
+
     it('leaves an absent optional field absent rather than inventing it', () => {
         const clean = sanitizeAgentReviewResponse({
             status: 'looks_good', reviewPass: true, summary: 's', findings: [],
@@ -391,6 +409,48 @@ describe('sanitizeAgentReviewResponse', () => {
         expect(clean.missingContext).toBeUndefined();
         expect(clean.meta).toBeUndefined();
         expect('suggestedFix' in (clean.findings[0] ?? {})).toBe(false);
+    });
+});
+
+describe('markdown injection through server-supplied text', () => {
+    const review = (over: Record<string, unknown>) => formatAgentReview({
+        status: 'needs_changes', reviewPass: false, summary: 's', findings: [], ...over,
+    } as never);
+
+    const finding = (over: Record<string, unknown>) => ({
+        id: 'AF-1', file: 'a.ts', startLine: 1, endLine: 1, inPatch: true,
+        severity: 'blocker', category: 'bug', message: 'm', confidence: 9, ...over,
+    });
+
+    it('does not let a blank line in a missingContext path forge a new section', () => {
+        // Markdown resolves block structure before inline spans, so a blank
+        // line would end the list item and let a heading parse as real.
+        const out = review({ missingContext: ['a.ts\n\n## Fake section\n\ninjected'] });
+        expect(out).not.toMatch(/^## Fake section$/m);
+        expect(out).toContain('injected');
+    });
+
+    it('does not let a blank line in a finding id forge a new section', () => {
+        // A heading the renderer never emits itself, so a match can only come
+        // from the injected text.
+        const out = review({ findings: [finding({ id: 'AF-1\n\n### Injected Section\n\nfake' })] });
+        expect(out).not.toMatch(/^### Injected Section$/m);
+        expect(out).toContain('Injected Section');
+    });
+
+    it('widens the suggested-fix fence past a fenced block inside the fix', () => {
+        const out = review({
+            findings: [finding({ suggestedFix: 'before\n```\nescaped\n```\nafter' })],
+        });
+        // The opening fence must be longer than any run inside the fix.
+        expect(out).toContain('````');
+        const opening = out.split('\n').find((l) => /^`{4,}$/.test(l));
+        expect(opening).toBeDefined();
+    });
+
+    it('leaves an ordinary suggested fix on a plain three-backtick fence', () => {
+        const out = review({ findings: [finding({ suggestedFix: 'const x = 1;' })] });
+        expect(out).toContain('```\nconst x = 1;\n```');
     });
 });
 

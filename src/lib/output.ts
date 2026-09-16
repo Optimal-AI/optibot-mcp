@@ -67,10 +67,39 @@ export function parseFileComments(fileComments: string[]): ParsedFileComment[] {
  * characters rather than markdown.
  */
 function inlineCode(text: string): string {
-    const longestRun = (text.match(/`+/g) ?? []).reduce((max, run) => Math.max(max, run.length), 0);
+    // Line endings collapse to spaces first. A widened fence solves a backtick
+    // collision, but markdown resolves block structure before inline spans, so
+    // a blank line inside the text ends the list item outright and whatever
+    // follows it — a heading, a rule, a fake findings section — is parsed as
+    // real structure. CommonMark treats a line ending inside a code span as a
+    // space anyway, so this matches what an intact span would have rendered.
+    const flattened = text.replace(/[\r\n]+/g, ' ');
+    const longestRun = (flattened.match(/`+/g) ?? []).reduce((max, run) => Math.max(max, run.length), 0);
     const fence = '`'.repeat(longestRun + 1);
-    const padding = text.startsWith('`') || text.endsWith('`') ? ' ' : '';
-    return `${fence}${padding}${text}${padding}${fence}`;
+    const padding = flattened.startsWith('`') || flattened.endsWith('`') ? ' ' : '';
+    return `${fence}${padding}${flattened}${padding}${fence}`;
+}
+
+/**
+ * Recursively returns `value` with every string in it sanitized.
+ *
+ * A named list of fields was the obvious way to write this and the wrong one:
+ * anything the service adds later rides through untouched until someone
+ * remembers to extend the list, and the service is a separate codebase that
+ * evolves on its own schedule. Walking the structure means a field this client
+ * has never heard of is still cleaned. Non-strings are returned as they are.
+ */
+function deepSanitize<T>(value: T): T {
+    if (typeof value === 'string') return sanitizeServerText(value) as unknown as T;
+    if (Array.isArray(value)) return value.map((item) => deepSanitize(item)) as unknown as T;
+    if (value !== null && typeof value === 'object') {
+        const out: Record<string, unknown> = {};
+        for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+            out[key] = deepSanitize(item);
+        }
+        return out as unknown as T;
+    }
+    return value;
 }
 
 /**
@@ -79,52 +108,15 @@ function inlineCode(text: string): string {
  *
  * The rendered markdown sanitizes each field as it interpolates it, but the
  * structured payload is handed to the host as data, and this repo's rule is
- * that any string the backend returns is sanitized before it enters a tool
+ * that any string the service returns is sanitized before it enters a tool
  * result — both channels are the tool result. Without this, a reviewer that
  * quotes attacker-authored source back in a finding message reaches a host
  * with cursor, screen-clearing, and OSC 52 clipboard sequences intact.
  */
 export function sanitizeAgentReviewResponse(response: AgentReviewResponse): AgentReviewResponse {
-    const clean = (value: string | undefined): string | undefined =>
-        typeof value === 'string' ? sanitizeServerText(value) : value;
-
-    return {
-        ...response,
-        summary: sanitizeServerText(response.summary ?? ''),
-        findings: (response.findings ?? []).map((finding) => ({
-            ...finding,
-            id: sanitizeServerText(String(finding.id ?? '')),
-            file: sanitizeServerText(String(finding.file ?? '')),
-            category: sanitizeServerText(String(finding.category ?? '')) as AgentReviewFinding['category'],
-            message: sanitizeServerText(String(finding.message ?? '')),
-            ...(finding.suggestedFix !== undefined
-                ? { suggestedFix: clean(finding.suggestedFix) }
-                : {}),
-        })),
-        ...(response.missingContext
-            ? { missingContext: response.missingContext.map((p) => sanitizeServerText(String(p))) }
-            : {}),
-        ...(response.meta
-            ? {
-                meta: {
-                    ...response.meta,
-                    ...(response.meta.model !== undefined ? { model: clean(response.meta.model) } : {}),
-                    ...(response.meta.provider !== undefined ? { provider: clean(response.meta.provider) } : {}),
-                },
-            }
-            : {}),
-    };
+    return deepSanitize(response);
 }
 
-/**
- * True when the service reported a real daily ceiling.
- *
- * When no daily cap is configured — the default for agent reviews — the
- * service answers with Number.MAX_SAFE_INTEGER for `limit` and `remaining`
- * and 0 for `current`, because it short-circuits before counting anything.
- * Rendering that verbatim produces "Reviews used: 0/9007199254740991", so the
- * counter is omitted instead: there is no quota to report.
- */
 export function hasReviewQuota(
     rc: { current?: number; limit?: number; remaining?: number } | undefined,
 ): rc is { current: number; limit: number; remaining: number; resetAt?: string } {
@@ -216,9 +208,19 @@ function formatFinding(finding: AgentReviewFinding, index: number): string[] {
         // being asked, so the obligation is stated next to every fix.
         lines.push('**Suggested fix** — show it to the user and get their agreement before applying it:');
         lines.push('');
-        lines.push('```');
-        lines.push(sanitizeServerText(finding.suggestedFix));
-        lines.push('```');
+        // The fence widens past the longest backtick run in the fix, for the
+        // same reason inlineCode does: a fenced block closes at the first line
+        // carrying at least as many backticks as opened it, so a fix that
+        // contains a fenced example — or source crafted to contain one — would
+        // otherwise end the block early and let everything after it parse as
+        // markdown. This is the field the comment above calls the highest-stakes
+        // one, since a host may apply it unattended.
+        const fixText = sanitizeServerText(finding.suggestedFix);
+        const longestFixRun = (fixText.match(/`+/g) ?? []).reduce((max, run) => Math.max(max, run.length), 0);
+        const fixFence = '`'.repeat(Math.max(3, longestFixRun + 1));
+        lines.push(fixFence);
+        lines.push(fixText);
+        lines.push(fixFence);
     }
 
     lines.push('');
