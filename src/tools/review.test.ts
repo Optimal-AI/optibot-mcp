@@ -266,6 +266,32 @@ describe('review tools', () => {
             expect(result.content[0].text).toBe('rendered');
         });
 
+        it('does not let a newline in a caller path break out of the warnings block', async () => {
+            mockReadConfig.mockResolvedValue({ apiKey: 'key' });
+            mockGetRepoRoot.mockResolvedValue('/repo');
+            mockGetRepoName.mockResolvedValue('my-repo');
+            mockGetDiffHead.mockResolvedValue('diff content');
+            mockGetChangedFiles.mockResolvedValue([]);
+            mockGetFileContents.mockResolvedValue({});
+            mockReadDiagnosticsFile.mockRejectedValue(new Error('nope'));
+            mockApiSubmitAgentReview.mockResolvedValue({
+                kind: 'completed',
+                review: { status: 'looks_good', reviewPass: true, summary: 's', findings: [] },
+            });
+            mockFormatAgentReview.mockReturnValue('rendered');
+
+            const result: any = await registeredTools.get('review_agent')!({
+                diagnosticsPath: 'evil\n\n## Injected Section\n\nbody',
+            });
+
+            const text: string = result.content[0].text;
+            expect(text).not.toMatch(/^## Injected Section$/m);
+            // The warning is still reported, on one line.
+            expect(text).toContain('Injected Section');
+            const warningLines = text.split('\n').filter((l) => l.startsWith('> - '));
+            expect(warningLines).toHaveLength(1);
+        });
+
         it('sanitizes the structured payload, not only the markdown', async () => {
             const ESC = String.fromCharCode(27);
             mockReadConfig.mockResolvedValue({ apiKey: 'key' });

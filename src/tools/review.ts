@@ -286,7 +286,14 @@ export function registerReviewTools(server: McpServer): void {
                 const safeResponse = sanitizeAgentReviewResponse(response);
                 let text = formatAgentReview(safeResponse);
                 if (warnings.length > 0) {
-                    const warningBlock = ['> **Context warnings:**', ...warnings.map(w => `> - ${w}`)].join('\n');
+                    // Flattened here rather than at each source: a warning
+                    // quotes a path the caller named, sanitizeServerText keeps
+                    // newlines by design, and a newline inside one ends the
+                    // blockquote so whatever follows parses as real markdown.
+                    // One place to flatten means a warning added later cannot
+                    // reintroduce the hole.
+                    const flatten = (w: string) => w.replace(/[\r\n]+/g, ' ');
+                    const warningBlock = ['> **Context warnings:**', ...warnings.map((w) => `> - ${flatten(w)}`)].join('\n');
                     text = `${warningBlock}\n\n${text}`;
                 }
                 // The markdown stays for a host that renders text; the same
