@@ -60,13 +60,6 @@ export interface AgentReviewFinding {
     confidence: number;
 }
 
-export interface AgentReviewCountInfo {
-    current: number;
-    limit: number;
-    remaining: number;
-    resetAt?: string;
-}
-
 export interface AgentReviewResponse {
     status: 'needs_changes' | 'looks_good';
     reviewPass: boolean;
@@ -80,7 +73,7 @@ export interface AgentReviewResponse {
      * schema marks them optional, and an older or self-hosted backend may omit
      * them. A required type here only type-checks a caller that then crashes.
      */
-    reviewCount?: AgentReviewCountInfo;
+    reviewCount?: ReviewStatus;
     isOptibotInstalled?: boolean;
     /**
      * `model`/`provider` name the model that produced the findings. The
@@ -97,7 +90,7 @@ export interface AgentReviewResponse {
  */
 export type AgentReviewSubmission =
     | { kind: 'completed'; review: AgentReviewResponse }
-    | { kind: 'accepted'; reviewId: string; reviewCount?: AgentReviewCountInfo };
+    | { kind: 'accepted'; reviewId: string; reviewCount?: ReviewStatus };
 
 /**
  * Machine-readable failure kinds on the async result endpoint. The server names

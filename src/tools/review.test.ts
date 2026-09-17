@@ -18,6 +18,9 @@ const mockFormatReview = vi.fn();
 const mockFormatAgentReview = vi.fn();
 const mockFormatError = vi.fn();
 const mockApiReview = vi.fn();
+// Produces the canned review that submitAgentReview resolves with. Not a
+// method on ApiClient: the synchronous reviewAgent had no caller and was
+// removed, so the mocked client no longer declares it either.
 const mockApiReviewAgent = vi.fn();
 const mockApiSubmitAgentReview = vi.fn();
 const mockApiGetAgentReviewResult = vi.fn();
@@ -57,7 +60,6 @@ vi.mock('../lib/git.js', () => ({
 vi.mock('../lib/api.js', () => ({
     ApiClient: class {
         review(...args: any[]) { return mockApiReview(...args); }
-        reviewAgent(...args: any[]) { return mockApiReviewAgent(...args); }
         submitAgentReview(...args: any[]) { return mockApiSubmitAgentReview(...args); }
         getAgentReviewResult(...args: any[]) { return mockApiGetAgentReviewResult(...args); }
     },

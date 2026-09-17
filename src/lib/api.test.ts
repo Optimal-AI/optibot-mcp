@@ -169,10 +169,12 @@ describe('ApiClient', () => {
         });
     });
 
-    describe('reviewAgent', () => {
+    // These exercise buildAgentBody, which submitAgentReview now owns outright:
+    // the synchronous reviewAgent had no caller and was removed.
+    describe('submitAgentReview body building', () => {
         it('sends POST to /api/review/agent with correct headers', async () => {
             mockOkResponse({});
-            await client.reviewAgent({ patch: 'diff' });
+            await client.submitAgentReview({ patch: 'diff' });
 
             expect(fetchMock).toHaveBeenCalledWith(
                 'http://test-api.local/api/review/agent',
@@ -188,7 +190,7 @@ describe('ApiClient', () => {
 
         it('base64-encodes the patch in the request body', async () => {
             mockOkResponse({});
-            await client.reviewAgent({ patch: 'hello diff' });
+            await client.submitAgentReview({ patch: 'hello diff' });
 
             const callBody = JSON.parse(fetchMock.mock.calls[0][1].body);
             expect(callBody.patch).toBe(Buffer.from('hello diff').toString('base64'));
@@ -196,7 +198,7 @@ describe('ApiClient', () => {
 
         it('base64-encodes file contents when files are provided', async () => {
             mockOkResponse({});
-            await client.reviewAgent({ patch: 'x', files: { 'a.ts': 'file content' } });
+            await client.submitAgentReview({ patch: 'x', files: { 'a.ts': 'file content' } });
 
             const callBody = JSON.parse(fetchMock.mock.calls[0][1].body);
             expect(callBody.files['a.ts']).toBe(Buffer.from('file content').toString('base64'));
@@ -204,7 +206,7 @@ describe('ApiClient', () => {
 
         it('base64-encodes relatedFiles when provided', async () => {
             mockOkResponse({});
-            await client.reviewAgent({ patch: 'x', relatedFiles: { 'b.ts': 'related' } });
+            await client.submitAgentReview({ patch: 'x', relatedFiles: { 'b.ts': 'related' } });
 
             const callBody = JSON.parse(fetchMock.mock.calls[0][1].body);
             expect(callBody.relatedFiles['b.ts']).toBe(Buffer.from('related').toString('base64'));
@@ -212,7 +214,7 @@ describe('ApiClient', () => {
 
         it('sends localDiagnostics as plain text (not base64)', async () => {
             mockOkResponse({});
-            await client.reviewAgent({ patch: 'x', localDiagnostics: 'tsc: error TS2304' });
+            await client.submitAgentReview({ patch: 'x', localDiagnostics: 'tsc: error TS2304' });
 
             const callBody = JSON.parse(fetchMock.mock.calls[0][1].body);
             expect(callBody.localDiagnostics).toBe('tsc: error TS2304');
@@ -220,7 +222,7 @@ describe('ApiClient', () => {
 
         it('omits files, relatedFiles, and localDiagnostics when not provided', async () => {
             mockOkResponse({});
-            await client.reviewAgent({ patch: 'x' });
+            await client.submitAgentReview({ patch: 'x' });
 
             const callBody = JSON.parse(fetchMock.mock.calls[0][1].body);
             expect(callBody.files).toBeUndefined();
@@ -230,7 +232,7 @@ describe('ApiClient', () => {
 
         it('omits files and relatedFiles when empty objects', async () => {
             mockOkResponse({});
-            await client.reviewAgent({ patch: 'x', files: {}, relatedFiles: {} });
+            await client.submitAgentReview({ patch: 'x', files: {}, relatedFiles: {} });
 
             const callBody = JSON.parse(fetchMock.mock.calls[0][1].body);
             expect(callBody.files).toBeUndefined();
@@ -239,7 +241,7 @@ describe('ApiClient', () => {
 
         it('includes repositoryName when provided', async () => {
             mockOkResponse({});
-            await client.reviewAgent({ patch: 'x', repositoryName: 'my-repo' });
+            await client.submitAgentReview({ patch: 'x', repositoryName: 'my-repo' });
 
             const callBody = JSON.parse(fetchMock.mock.calls[0][1].body);
             expect(callBody.repositoryName).toBe('my-repo');
@@ -257,7 +259,11 @@ describe('ApiClient', () => {
             };
             mockOkResponse(body);
 
-            const result = await client.reviewAgent({ patch: 'x' });
+            const submission = await client.submitAgentReview({ patch: 'x' });
+            // An older service answers the submit inline, which arrives as
+            // 'completed' with the review attached and no decode pass.
+            expect(submission.kind).toBe('completed');
+            const result = (submission as { kind: 'completed'; review: typeof body }).review;
             expect(result.summary).toBe('plain summary');
             expect(result.findings[0].message).toBe('plain text');
             expect(result.status).toBe('needs_changes');
@@ -265,7 +271,7 @@ describe('ApiClient', () => {
 
         it('throws error with message from API when response is not ok', async () => {
             mockErrorResponse(429, { message: 'Agent review limit reached' });
-            await expect(client.reviewAgent({ patch: 'x' })).rejects.toThrow('Agent review limit reached');
+            await expect(client.submitAgentReview({ patch: 'x' })).rejects.toThrow('Agent review limit reached');
         });
     });
 
