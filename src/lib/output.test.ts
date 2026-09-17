@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { sanitizeServerText, parseFileComments, formatReview, formatResetTime, formatError } from './output.js';
+import { sanitizeServerText, parseFileComments, formatReview, formatAgentReview, formatResetTime, formatError, hasReviewQuota, sanitizeAgentReviewResponse } from './output.js';
+import { AgentReviewResponse, AgentReviewFinding } from '../types.js';
 
 describe('sanitizeServerText', () => {
     it('passes through normal text unchanged', () => {
@@ -291,5 +292,328 @@ describe('formatError', () => {
         expect(msg).not.toContain('\x1b]0;');
         expect(msg).not.toContain('\x07');
         expect(msg).toContain('https://getoptimal.ai/contact');
+    });
+});
+
+describe('missingContext rendering', () => {
+    const withMissing = (paths: string[]) => formatAgentReview({
+        status: 'needs_changes',
+        reviewPass: false,
+        findings: [],
+        summary: 's',
+        missingContext: paths,
+    } as never);
+
+    it('renders an ordinary path in a code span', () => {
+        expect(withMissing(['src/db.ts'])).toContain('`src/db.ts`');
+    });
+
+    it('keeps a finding id containing a backtick inside its code span', () => {
+        const out = formatAgentReview({
+            status: 'needs_changes',
+            reviewPass: false,
+            summary: 's',
+            findings: [{
+                id: 'AF-`evil', file: 'a.ts', startLine: 1, endLine: 1, inPatch: true,
+                severity: 'blocker', category: 'bug', message: 'm', confidence: 9,
+            }],
+        } as never);
+        // One backtick in the text, so the fence widens to two.
+        expect(out).toContain('- **id:** ``AF-`evil``');
+        expect(out).not.toContain('- **id:** `AF-`evil`');
+    });
+
+    it('keeps a path containing a backtick inside its code span', () => {
+        // sanitizeServerText strips control characters, not markdown, so a
+        // backtick in a server-supplied path would otherwise close the span.
+        const out = withMissing(['we`ird.ts']);
+        expect(out).toContain('``we`ird.ts``');
+    });
+});
+
+describe('sanitizeAgentReviewResponse', () => {
+    const ESC = String.fromCharCode(27);
+    const BEL = String.fromCharCode(7);
+    // Screen-clear plus an OSC 52 clipboard write — what a reviewer could quote
+    // back from attacker-authored source in the repository under review.
+    const evil = `${ESC}[2J${ESC}]52;c;cGF5bG9hZA==${BEL}text`;
+
+    const response = {
+        status: 'needs_changes',
+        reviewPass: false,
+        summary: `summary${evil}`,
+        missingContext: [`ctx${evil}.ts`],
+        meta: { mode: 'agent', durationMs: 1, model: `model${evil}`, provider: `prov${evil}` },
+        findings: [{
+            id: `AF${evil}`,
+            file: `a${evil}.ts`,
+            startLine: 1,
+            endLine: 2,
+            inPatch: true,
+            severity: 'blocker',
+            category: 'bug',
+            message: evil,
+            confidence: 9,
+            suggestedFix: `fix${evil}`,
+        }],
+    } as never;
+
+    it('strips escapes from every backend-supplied string', () => {
+        const clean = sanitizeAgentReviewResponse(response);
+        const f = clean.findings[0];
+        const values = [
+            clean.summary,
+            clean.missingContext![0],
+            clean.meta!.model!,
+            clean.meta!.provider!,
+            f.id, f.file, f.message, f.suggestedFix!,
+        ];
+        for (const value of values) {
+            expect(value).not.toContain(ESC);
+            expect(value).not.toContain(BEL);
+        }
+    });
+
+    it('keeps the readable text and the non-string fields', () => {
+        const clean = sanitizeAgentReviewResponse(response);
+        const f = clean.findings[0];
+        expect(f.message).toBe('text');
+        expect(clean.summary).toBe('summarytext');
+        expect(f.startLine).toBe(1);
+        expect(f.confidence).toBe(9);
+        expect(clean.reviewPass).toBe(false);
+    });
+
+    it('sanitizes a field the client does not know about', () => {
+        // The service is a separate codebase: a string field added there before
+        // this client's types catch up must still be cleaned.
+        const withExtra = sanitizeAgentReviewResponse({
+            status: 'looks_good', reviewPass: true, summary: 's', findings: [],
+            futureField: `later${ESC}[2Jvalue`,
+        } as never) as Record<string, unknown>;
+        expect(withExtra.futureField).toBe('latervalue');
+    });
+
+    it('does not let a __proto__ key from the service set a prototype', () => {
+        const payload = JSON.parse('{"status":"looks_good","reviewPass":true,"summary":"s","findings":[],"__proto__":{"polluted":true}}');
+        const clean = sanitizeAgentReviewResponse(payload) as Record<string, unknown>;
+        expect(Object.getPrototypeOf(clean)).toBeNull();
+        expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+    });
+
+    it('sanitizes reviewCount.resetAt', () => {
+        const clean = sanitizeAgentReviewResponse({
+            status: 'looks_good', reviewPass: true, summary: 's', findings: [],
+            reviewCount: { current: 1, limit: 5, remaining: 4, resetAt: `2026${ESC}[2J-01-01` },
+        } as never);
+        expect(clean.reviewCount!.resetAt).not.toContain(ESC);
+    });
+
+    it('leaves an absent optional field absent rather than inventing it', () => {
+        const clean = sanitizeAgentReviewResponse({
+            status: 'looks_good', reviewPass: true, summary: 's', findings: [],
+        } as never);
+        expect(clean.missingContext).toBeUndefined();
+        expect(clean.meta).toBeUndefined();
+        expect('suggestedFix' in (clean.findings[0] ?? {})).toBe(false);
+    });
+});
+
+describe('markdown injection through server-supplied text', () => {
+    const review = (over: Record<string, unknown>) => formatAgentReview({
+        status: 'needs_changes', reviewPass: false, summary: 's', findings: [], ...over,
+    } as never);
+
+    const finding = (over: Record<string, unknown>) => ({
+        id: 'AF-1', file: 'a.ts', startLine: 1, endLine: 1, inPatch: true,
+        severity: 'blocker', category: 'bug', message: 'm', confidence: 9, ...over,
+    });
+
+    it('does not let a blank line in a missingContext path forge a new section', () => {
+        // Markdown resolves block structure before inline spans, so a blank
+        // line would end the list item and let a heading parse as real.
+        const out = review({ missingContext: ['a.ts\n\n## Fake section\n\ninjected'] });
+        expect(out).not.toMatch(/^## Fake section$/m);
+        expect(out).toContain('injected');
+    });
+
+    it('does not let a blank line in a finding id forge a new section', () => {
+        // A heading the renderer never emits itself, so a match can only come
+        // from the injected text.
+        const out = review({ findings: [finding({ id: 'AF-1\n\n### Injected Section\n\nfake' })] });
+        expect(out).not.toMatch(/^### Injected Section$/m);
+        expect(out).toContain('Injected Section');
+    });
+
+    it('widens the suggested-fix fence past a fenced block inside the fix', () => {
+        const out = review({
+            findings: [finding({ suggestedFix: 'before\n```\nescaped\n```\nafter' })],
+        });
+        // The opening fence must be longer than any run inside the fix.
+        expect(out).toContain('````');
+        const opening = out.split('\n').find((l) => /^`{4,}$/.test(l));
+        expect(opening).toBeDefined();
+    });
+
+    it('leaves an ordinary suggested fix on a plain three-backtick fence', () => {
+        const out = review({ findings: [finding({ suggestedFix: 'const x = 1;' })] });
+        expect(out).toContain('```\nconst x = 1;\n```');
+    });
+});
+
+describe('hasReviewQuota', () => {
+    it('accepts a real ceiling', () => {
+        expect(hasReviewQuota({ current: 3, limit: 50, remaining: 47 })).toBe(true);
+    });
+
+    it('rejects the service\'s unlimited sentinel', () => {
+        expect(hasReviewQuota({
+            current: 0,
+            limit: Number.MAX_SAFE_INTEGER,
+            remaining: Number.MAX_SAFE_INTEGER,
+        })).toBe(false);
+    });
+
+    it('rejects a response missing remaining, which would render "undefined"', () => {
+        expect(hasReviewQuota({ current: 3, limit: 50 } as never)).toBe(false);
+    });
+
+    it('rejects a non-finite number, which would render "NaN"', () => {
+        expect(hasReviewQuota({ current: 3, limit: 50, remaining: NaN })).toBe(false);
+        expect(hasReviewQuota({ current: 3, limit: Infinity, remaining: 5 })).toBe(false);
+    });
+
+    it('rejects an absent reviewCount', () => {
+        expect(hasReviewQuota(undefined)).toBe(false);
+    });
+});
+
+describe('formatAgentReview', () => {
+    function makeFinding(overrides: Partial<AgentReviewFinding> = {}): AgentReviewFinding {
+        return {
+            id: 'AF-1a2b3c',
+            file: 'src/auth.ts',
+            startLine: 42,
+            endLine: 45,
+            inPatch: true,
+            severity: 'blocker',
+            category: 'bug',
+            message: 'Missing null check reachable from the login path.',
+            confidence: 8,
+            ...overrides,
+        };
+    }
+
+    function makeResponse(overrides: Partial<AgentReviewResponse> = {}): AgentReviewResponse {
+        return {
+            status: 'needs_changes',
+            reviewPass: false,
+            findings: [makeFinding()],
+            summary: 'One blocker found.',
+            reviewCount: { current: 1, limit: 50, remaining: 49 },
+            isOptibotInstalled: true,
+            meta: { mode: 'agent', durationMs: 8300 },
+            ...overrides,
+        };
+    }
+
+    it('renders the status header, summary, and finding count', () => {
+        const out = formatAgentReview(makeResponse());
+        expect(out).toContain('Optibot agent review');
+        expect(out).toContain('Needs changes');
+        expect(out).toContain('Findings: 1');
+        expect(out).toContain('One blocker found.');
+    });
+
+    it('renders a looks_good status', () => {
+        const out = formatAgentReview(makeResponse({ status: 'looks_good', reviewPass: true, findings: [], summary: '' }));
+        expect(out).toContain('Looks good');
+        expect(out).toContain('No findings');
+    });
+
+    it('renders severity + category + file:line + confidence + id for each finding', () => {
+        const out = formatAgentReview(makeResponse());
+        expect(out).toContain('[Blocker · bug] src/auth.ts:42-45');
+        expect(out).toContain('confidence:** 8/10');
+        expect(out).toContain('`AF-1a2b3c`');
+        expect(out).toContain('Missing null check');
+    });
+
+    it('collapses a single-line range', () => {
+        const out = formatAgentReview(makeResponse({ findings: [makeFinding({ startLine: 10, endLine: 10 })] }));
+        expect(out).toContain('src/auth.ts:10');
+        expect(out).not.toContain('src/auth.ts:10-10');
+    });
+
+    it('renders the suggested fix in a code block when present', () => {
+        const out = formatAgentReview(makeResponse({ findings: [makeFinding({ suggestedFix: 'if (!user) return;' })] }));
+        expect(out).toContain('Suggested fix');
+        expect(out).toContain('if (!user) return;');
+    });
+
+    it('marks findings that fall outside the changed lines', () => {
+        const out = formatAgentReview(makeResponse({ findings: [makeFinding({ inPatch: false })] }));
+        expect(out).toContain('outside the changed lines');
+    });
+
+    it('includes the severity breakdown bar', () => {
+        const out = formatAgentReview(makeResponse());
+        expect(out).toContain('Severity breakdown');
+        expect(out).toContain('Blocker');
+        expect(out).toContain('1/1');
+    });
+
+    it('does not ask the host to classify findings as signal or noise', () => {
+        const out = formatAgentReview(makeResponse());
+        expect(out).not.toContain('Signal vs noise');
+        expect(out).not.toContain('Signal-to-noise ratio');
+        expect(out).not.toContain('| # | id | file:line | severity | verdict | why |');
+    });
+
+    it('lists missingContext with a re-run note', () => {
+        const out = formatAgentReview(makeResponse({ missingContext: ['src/db.ts', 'src/user.ts'] }));
+        expect(out).toContain('Missing context');
+        expect(out).toContain('`src/db.ts`');
+        expect(out).toContain('`src/user.ts`');
+        expect(out).toContain('re-run');
+    });
+
+    it('renders a host-driven resubmit call-to-action with a relatedPaths literal', () => {
+        const out = formatAgentReview(makeResponse({ missingContext: ['src/db.ts', 'src/user.ts'] }));
+        expect(out).toContain('call `review_agent` again with');
+        expect(out).toContain('relatedPaths: ["src/db.ts", "src/user.ts"]');
+    });
+
+    it('renders the review count footer', () => {
+        const out = formatAgentReview(makeResponse());
+        expect(out).toContain('Reviews used: 1/50 (49 remaining)');
+    });
+
+    it('echoes model and provider from meta when present', () => {
+        const out = formatAgentReview(makeResponse({ meta: { mode: 'agent', durationMs: 5000, model: 'claude-sonnet-5', provider: 'anthropic' } }));
+        expect(out).toContain('model: claude-sonnet-5');
+        expect(out).toContain('provider: anthropic');
+    });
+
+    it('sanitizes control chars in server-supplied finding text', () => {
+        const out = formatAgentReview(makeResponse({ findings: [makeFinding({ message: '\x1b[31mBoom\x1b[0m', file: 'src/x\x07.ts' })] }));
+        expect(out).toContain('Boom');
+        expect(out).not.toContain('\x1b');
+        expect(out).not.toContain('\x07');
+    });
+
+    it('counts severities correctly across mixed findings', () => {
+        const out = formatAgentReview(makeResponse({
+            findings: [
+                makeFinding({ id: 'a', severity: 'blocker' }),
+                makeFinding({ id: 'b', severity: 'warning' }),
+                makeFinding({ id: 'c', severity: 'nit' }),
+                makeFinding({ id: 'd', severity: 'warning' }),
+            ],
+        }));
+        expect(out).toContain('Findings: 4');
+        expect(out).toMatch(/Blocker\s+\S+\s+\d+%\s+1\/4/);
+        expect(out).toMatch(/Warning\s+\S+\s+\d+%\s+2\/4/);
+        expect(out).toMatch(/Nit\s+\S+\s+\d+%\s+1\/4/);
     });
 });

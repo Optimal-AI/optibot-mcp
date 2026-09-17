@@ -20,6 +20,108 @@ export interface ReviewResponse {
     };
 }
 
+// ------ Agent review mode ------
+// Mirrors the Optibot API contract for agent mode, which returns
+// structured findings as native JSON (NOT base64-encoded, unlike full mode).
+
+export type FindingSeverity = 'blocker' | 'warning' | 'nit';
+
+export type FindingCategory =
+    | 'bug'
+    | 'security'
+    | 'performance'
+    | 'refactor'
+    | 'tech-debt'
+    | 'duplicate'
+    | 'style'
+    | 'documentation'
+    | 'test'
+    | 'other';
+
+export interface AgentReviewFinding {
+    /**
+     * Identifies this finding within this response only. The server hashes the
+     * reviewer's message into it and the reviewer runs at a non-zero
+     * temperature, so two identical requests return different ids for the same
+     * defect. Do not use it to match a finding across rounds or runs.
+     */
+    id: string;
+    file: string;
+    startLine: number;
+    endLine: number;
+    /** false = valid finding whose lines fall outside the diff's changed ranges. */
+    inPatch: boolean;
+    severity: FindingSeverity;
+    category: FindingCategory;
+    /** Raw reviewer text — no wrapper, no jump link. */
+    message: string;
+    suggestedFix?: string;
+    /** 1-10, surfaced from the reviewer. */
+    confidence: number;
+}
+
+export interface AgentReviewResponse {
+    status: 'needs_changes' | 'looks_good';
+    reviewPass: boolean;
+    findings: AgentReviewFinding[];
+    summary: string;
+    /** File paths the reviewer needed but wasn't given — caller reads them locally and resubmits. */
+    missingContext?: string[];
+    /**
+     * The three fields below are optional because every consumer already
+     * treats them that way: the renderer guards each one, the tool's output
+     * schema marks them optional, and an older or self-hosted backend may omit
+     * them. A required type here only type-checks a caller that then crashes.
+     */
+    reviewCount?: ReviewStatus;
+    isOptibotInstalled?: boolean;
+    /**
+     * `model`/`provider` name the model that produced the findings. The
+     * service always sends both.
+     */
+    meta?: { mode: 'agent'; durationMs: number; model?: string; provider?: string };
+}
+
+/**
+ * Outcome of submitting an agent review with `async: true`. A backend with the
+ * async path answers 202 with a reviewId to poll ('accepted'); one without it
+ * ignores the unknown field, runs the review inline, and answers 200 with the
+ * finished review ('completed').
+ */
+export type AgentReviewSubmission =
+    | { kind: 'completed'; review: AgentReviewResponse }
+    | { kind: 'accepted'; reviewId: string; reviewCount?: ReviewStatus };
+
+/**
+ * Machine-readable failure kinds on the async result endpoint. The server names
+ * the kinds it can distinguish and omits the field for everything else, so a
+ * client branches on the ones it knows and treats an absent or unknown value as
+ * a generic failure.
+ */
+export type AgentReviewErrorType = 'context_window_exceeded' | 'timeout';
+
+/**
+ * Response of GET /api/review/agent/result/:reviewId. Unlike the full-mode
+ * result endpoint, a finished review is nested under `result` rather than
+ * spread onto the envelope, because the review carries its own `status`.
+ */
+export type AgentReviewResultResponse =
+    | { status: 'pending' }
+    | { status: 'not_found' }
+    | { status: 'failed'; error?: string; errorType?: AgentReviewErrorType | string }
+    | { status: 'done'; result: AgentReviewResponse };
+
+export interface AgentReviewRequest {
+    patch: string;
+    repositoryName?: string;
+    /** Changed files: filePath -> raw (unencoded) content; the client base64-encodes them. */
+    files?: Record<string, string>;
+    /** Caller-gathered context beyond the diff (callers, imports, tests). */
+    relatedFiles?: Record<string, string>;
+    /** Plain-text (NOT base64) output of a local tsc/eslint/LSP run. */
+    localDiagnostics?: string;
+}
+
 export interface ParsedFileComment {
     filePath: string;
     startLine: number;

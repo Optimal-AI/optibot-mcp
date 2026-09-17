@@ -173,35 +173,75 @@ function parseNameStatus(output: string, map: Map<string, GitChangedFile>): void
 // hundreds of MB across the wire before the backend rejects.
 const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
 
+/**
+ * One request's share of the upload cap.
+ *
+ * The changed files and the related files go up in the same request, so each
+ * keeping its own counter let a single review carry twice the cap. Pass one
+ * budget through both calls to hold the total.
+ */
+export interface UploadBudget {
+    canFit(size: number): boolean;
+    spend(size: number): void;
+    remaining(): number;
+}
+
+export function createUploadBudget(limitBytes: number = MAX_UPLOAD_BYTES): UploadBudget {
+    let spent = 0;
+    return {
+        canFit: (size: number) => spent + size <= limitBytes,
+        spend: (size: number) => { spent += size; },
+        remaining: () => Math.max(0, limitBytes - spent),
+    };
+}
+
 export async function getFileContents(
     changedFiles: GitChangedFile[],
-    repoRoot: string
+    repoRoot: string,
+    budget: UploadBudget = createUploadBudget(),
 ): Promise<Record<string, string>> {
     const contents: Record<string, string> = {};
-    let totalBytes = 0;
     let truncated = 0;
 
     for (const file of changedFiles) {
         if (file.status === 'D') continue;
 
-        if (isSensitiveFile(file.relativePath)) {
-            console.error(`[security] Skipping potentially sensitive file: ${file.relativePath}`);
+        // Through the shared gate: this used to join the path and check the
+        // sensitive-name list against git's own spelling, so a changed file
+        // that was a symlink named `notes.md` pointing at `.env` passed both
+        // and was uploaded, and nothing resolved the link at all.
+        const screened = await screenReadablePath(file.relativePath, repoRoot);
+        if (!screened.ok) {
+            if (screened.reason === 'sensitive') {
+                console.error(`[security] Skipping potentially sensitive file: ${file.relativePath}`);
+            }
             continue;
         }
-
-        const absolutePath = path.join(repoRoot, file.relativePath);
-
-        if (await isBinaryFile(absolutePath)) continue;
+        const absolutePath = screened.absolutePath;
 
         try {
+            // Size from the directory entry first, like the related-file path:
+            // a changed file that cannot fit the budget should not be opened at
+            // all. A single huge text file in the working tree would otherwise
+            // spike this long-lived server's memory, taking down every other
+            // tool call in the host session. This runs before the binary sniff,
+            // which itself opens the file and reads its first bytes.
+            const stat = await fs.stat(absolutePath);
+            if (!budget.canFit(stat.size)) {
+                truncated += 1;
+                continue;
+            }
+
+            if (await isBinaryFile(absolutePath)) continue;
+
             const content = await fs.readFile(absolutePath, 'utf-8');
             const size = Buffer.byteLength(content, 'utf-8');
-            if (totalBytes + size > MAX_UPLOAD_BYTES) {
+            if (!budget.canFit(size)) {
                 truncated += 1;
                 continue;
             }
             contents[file.relativePath] = content;
-            totalBytes += size;
+            budget.spend(size);
         } catch {
             // Skip files we can't read
         }
@@ -212,6 +252,232 @@ export async function getFileContents(
     }
 
     return contents;
+}
+
+/**
+ * Resolves a caller-supplied related path to an absolute path inside
+ * `repoRoot`, or returns null when it escapes.
+ *
+ * The lexical check alone is not enough: `path.resolve` cannot see through a
+ * symlink, so a link that lives inside the repository but points outside it
+ * passes a `startsWith` test and then reads the target anyway. Both the root
+ * and the candidate are resolved through realpath before comparing.
+ *
+ * This matters most for paths the reviewer asked for. The `missingContext`
+ * list is the one field a caller acts on without reading it first, and the
+ * host may pass those paths straight back in `relatedPaths`, so the decision
+ * to read lands here.
+ */
+export async function resolveRelatedPath(
+    requestedPath: string,
+    repoRoot: string,
+): Promise<string | null> {
+    if (typeof requestedPath !== 'string') return null;
+    const candidate = requestedPath.trim();
+    if (candidate === '') return null;
+    // Refused before touching the filesystem: both name a location the
+    // repository does not contain.
+    if (path.isAbsolute(candidate) || candidate.startsWith('~')) return null;
+    // A NUL truncates the path in whatever syscall reads it.
+    if (candidate.includes('\0')) return null;
+
+    let realRoot: string;
+    try {
+        realRoot = await fs.realpath(repoRoot);
+    } catch {
+        realRoot = path.resolve(repoRoot);
+    }
+
+    const absolutePath = path.resolve(realRoot, candidate);
+    if (!isInsideRoot(realRoot, absolutePath)) return null;
+
+    try {
+        const realPath = await fs.realpath(absolutePath);
+        if (!isInsideRoot(realRoot, realPath)) return null;
+        return realPath;
+    } catch {
+        return null;
+    }
+}
+
+/** True when `target` is `root` itself or sits beneath it. */
+function isInsideRoot(root: string, target: string): boolean {
+    return target === root || target.startsWith(root + path.sep);
+}
+
+/**
+ * Read caller-specified related-context files (callers, interfaces, tests) that
+ * are NOT part of the diff, so the agent reviewer can see them. Paths are
+ * repo-relative. Returns the readable file contents keyed by their
+ * repo-relative path, plus a warning line for every path that was skipped
+ * (missing, unreadable, sensitive, binary, outside the repo, or over the
+ * upload budget) so the tool can surface it to the host.
+ */
+/**
+ * The single gate every path passes before its contents are uploaded.
+ *
+ * Three functions in this file read a path somebody else named — the changed
+ * files git reports, the related files the caller asks for, and the
+ * diagnostics file — and send what they find to the reviewer. Each guard was
+ * written into one of them and missed in another five separate times: the
+ * realpath containment, the sensitive-name check against the resolved path,
+ * the size check before the read, and the shared upload budget. Routing all
+ * three through one function is what stops the sixth.
+ *
+ * Returns the resolved absolute path, or the reason it was refused.
+ */
+export type PathScreening =
+    | { ok: true; absolutePath: string }
+    | { ok: false; reason: 'outside' | 'sensitive' | 'binary' };
+
+export async function screenReadablePath(
+    requestedPath: string,
+    repoRoot: string,
+): Promise<PathScreening> {
+    const absolutePath = await resolveRelatedPath(requestedPath, repoRoot);
+    if (!absolutePath) return { ok: false, reason: 'outside' };
+
+    // Both names, always: a symlink called `notes.md` pointing at `.env` is
+    // inside the repository, so containment passes and only the resolved name
+    // gives it away.
+    if (isSensitiveFile(requestedPath) || isSensitiveFile(absolutePath)) {
+        return { ok: false, reason: 'sensitive' };
+    }
+
+    if (isBinaryExtension(requestedPath) || isBinaryExtension(absolutePath)) {
+        return { ok: false, reason: 'binary' };
+    }
+
+    return { ok: true, absolutePath };
+}
+
+export async function getRelatedFileContents(
+    relatedPaths: string[],
+    repoRoot: string,
+    budget: UploadBudget = createUploadBudget(),
+): Promise<{ contents: Record<string, string>; warnings: string[] }> {
+    const contents: Record<string, string> = {};
+    const warnings: string[] = [];
+
+    for (const rawPath of relatedPaths) {
+        const relativePath = rawPath.trim();
+        if (!relativePath) continue;
+
+        const screened = await screenReadablePath(relativePath, repoRoot);
+        if (!screened.ok) {
+            if (screened.reason === 'sensitive') {
+                console.error(`[security] Skipping potentially sensitive related file: ${relativePath}`);
+                warnings.push(`Skipped potentially sensitive related file: ${relativePath}`);
+            } else if (screened.reason === 'binary') {
+                warnings.push(`Skipped binary related file: ${relativePath}`);
+            } else {
+                warnings.push(`Skipped related file: not a readable file inside the repository: ${relativePath}`);
+            }
+            continue;
+        }
+        const absolutePath = screened.absolutePath;
+
+        // Size first, from the directory entry: a file that cannot fit the
+        // budget should never be pulled into memory just to be discarded.
+        // Buffer.byteLength on the decoded text is still the figure that is
+        // spent, since that is what actually goes over the wire.
+        try {
+            const stat = await fs.stat(absolutePath);
+            if (!budget.canFit(stat.size)) {
+                warnings.push(`Skipped related file (upload budget exceeded): ${relativePath}`);
+                continue;
+            }
+        } catch {
+            warnings.push(`Could not read related file: ${relativePath}`);
+            continue;
+        }
+
+        let content: string;
+        try {
+            content = await fs.readFile(absolutePath, 'utf-8');
+        } catch {
+            warnings.push(`Could not read related file: ${relativePath}`);
+            continue;
+        }
+
+        // Same content-level rule getFileContents applies to the bytes on
+        // disk, run against the text already decoded here.
+        if (looksBinary(content)) {
+            warnings.push(`Skipped binary related file: ${relativePath}`);
+            continue;
+        }
+
+        const size = Buffer.byteLength(content, 'utf-8');
+        if (!budget.canFit(size)) {
+            warnings.push(`Skipped related file (upload budget exceeded): ${relativePath}`);
+            continue;
+        }
+
+        contents[relativePath] = content;
+        budget.spend(size);
+    }
+
+    return { contents, warnings };
+}
+
+/**
+ * Reads a caller-supplied diagnostics file (local `tsc`/`eslint` output) whose
+ * contents are sent to the reviewer.
+ *
+ * This path is supplied the same way a related path is, so it gets the same
+ * discipline: resolved through realpath so a symlink cannot point out of the
+ * repository, refused when it names a sensitive file, and capped in size.
+ * Without that, a `diagnosticsPath` of `.env` or `id_rsa` would be read and
+ * uploaded as plain text.
+ */
+export async function readDiagnosticsFile(
+    filePath: string,
+    repoRoot: string,
+    budget: UploadBudget = createUploadBudget(),
+): Promise<string> {
+    const screened = await screenReadablePath(filePath, repoRoot);
+    if (!screened.ok) {
+        if (screened.reason === 'sensitive') {
+            throw new Error(`Refusing to read a potentially sensitive diagnostics file: ${filePath}`);
+        }
+        if (screened.reason === 'binary') {
+            throw new Error(`Diagnostics file looks binary, expected text output: ${filePath}`);
+        }
+        throw new Error(`Diagnostics file must be a readable file within the repository. Got: ${filePath}`);
+    }
+    const absolutePath = screened.absolutePath;
+
+    // Spends from the same budget as the changed files and the related files.
+    // Diagnostics travel in the same request, so a separate 25 MB allowance
+    // here is the twice-the-cap problem the shared budget exists to prevent.
+    // The file can vanish between the realpath check and the stat, and a raw
+    // ENOENT reads as a crash rather than the answer the other readers give.
+    let stat;
+    try {
+        stat = await fs.stat(absolutePath);
+    } catch {
+        throw new Error(`Diagnostics file must be a readable file within the repository. Got: ${filePath}`);
+    }
+    if (!budget.canFit(stat.size)) {
+        throw new Error(`Diagnostics file does not fit the remaining upload budget (${stat.size} bytes, ${budget.remaining()} left): ${filePath}`);
+    }
+
+    const content = await fs.readFile(absolutePath, 'utf-8');
+    // Content-level binary check, mirroring the related-file path: an
+    // extension proves nothing, and a .log carrying NUL bytes is not the text
+    // output this field is for.
+    if (looksBinary(content)) {
+        throw new Error(`Diagnostics file looks binary, expected text output: ${filePath}`);
+    }
+    // Re-checked against the decoded length, as the other two readers do: the
+    // stat check used the on-disk size, and invalid UTF-8 decodes to
+    // replacement characters that are longer than the bytes they replaced.
+    const size = Buffer.byteLength(content, 'utf-8');
+    if (!budget.canFit(size)) {
+        throw new Error(`Diagnostics file does not fit the remaining upload budget (${size} bytes, ${budget.remaining()} left): ${filePath}`);
+    }
+    budget.spend(size);
+    return content;
 }
 
 export async function getRemoteBranches(repoRoot: string): Promise<string[]> {
@@ -285,6 +551,28 @@ export async function checkMergeConflicts(targetBranch: string, repoRoot: string
 function isBinaryExtension(filePath: string): boolean {
     const lower = filePath.toLowerCase();
     return BINARY_EXTENSIONS.some(ext => lower.endsWith(ext));
+}
+
+/**
+ * The content-level binary test, applied to text already in memory.
+ *
+ * getFileContents sniffs the file on disk; the other two readers already hold
+ * the decoded text, and were checking only for a NUL byte. That let dense
+ * binary with no NUL through one path and not the other — the same divergence
+ * that produced every other split guard in this file. One rule, two entry
+ * points.
+ */
+export function looksBinary(text: string): boolean {
+    if (text.length === 0) return false;
+    if (text.includes('\u0000')) return true;
+
+    const sample = text.slice(0, 8192);
+    let nonText = 0;
+    for (let i = 0; i < sample.length; i++) {
+        const code = sample.charCodeAt(i);
+        if (code < 9 || (code > 13 && code < 32 && code !== 27)) nonText++;
+    }
+    return nonText / sample.length > 0.3;
 }
 
 async function isBinaryContent(filePath: string): Promise<boolean> {

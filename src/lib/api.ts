@@ -1,5 +1,9 @@
 import {
     ReviewResponse,
+    AgentReviewResponse,
+    AgentReviewRequest,
+    AgentReviewSubmission,
+    AgentReviewResultResponse,
     ApiKeyCreateResponse,
     ApiKeyListItem,
     ApiKeyListResponse,
@@ -30,8 +34,14 @@ export class ApiClient {
 
         try {
             errorData = await response.json() as Record<string, unknown>;
-            const msg = (errorData as { message?: unknown }).message;
-            if (typeof msg === 'string') {
+            // The backend answers with `error` on every path the agent-mode
+            // endpoints use, and with `message` on some older ones. Reading
+            // only `message` dropped the actionable text — a 413 arrived as
+            // "API request failed: Payload Too Large (413)" with the
+            // explanation of what to do about it thrown away.
+            const body = errorData as { message?: unknown; error?: unknown };
+            const msg = typeof body.error === 'string' ? body.error : body.message;
+            if (typeof msg === 'string' && msg.trim() !== '') {
                 errorMessage = msg;
             }
         } catch {
@@ -103,6 +113,110 @@ export class ApiClient {
         }
 
         return result;
+    }
+
+    /**
+     * Builds the agent-mode request body. `patch`, `files`, and `relatedFiles`
+     * are base64-encoded; `localDiagnostics` is sent as plain text, per the
+     * backend contract.
+     */
+    private buildAgentBody(params: AgentReviewRequest): Record<string, unknown> {
+        const patchBase64 = Buffer.from(params.patch, 'utf-8').toString('base64');
+
+        const body: Record<string, unknown> = { patch: patchBase64 };
+
+        if (params.repositoryName) {
+            body.repositoryName = params.repositoryName;
+        }
+
+        // Base64-encode changed files and related-context files. Use
+        // null-prototype maps: filenames from a repo are untrusted input
+        // (a file literally named `__proto__` would otherwise pollute).
+        if (params.files && Object.keys(params.files).length > 0) {
+            const encodedFiles: Record<string, string> = Object.create(null);
+            for (const [filePath, content] of Object.entries(params.files)) {
+                encodedFiles[filePath] = Buffer.from(content, 'utf-8').toString('base64');
+            }
+            body.files = encodedFiles;
+        }
+
+        if (params.relatedFiles && Object.keys(params.relatedFiles).length > 0) {
+            const encodedRelated: Record<string, string> = Object.create(null);
+            for (const [filePath, content] of Object.entries(params.relatedFiles)) {
+                encodedRelated[filePath] = Buffer.from(content, 'utf-8').toString('base64');
+            }
+            body.relatedFiles = encodedRelated;
+        }
+
+        // localDiagnostics is plain text (NOT base64), per the backend contract.
+        if (params.localDiagnostics) {
+            body.localDiagnostics = params.localDiagnostics;
+        }
+
+        return body;
+    }
+
+    /**
+     * Submits an agent review with `async: true`. A backend with the async path
+     * answers 202 with a reviewId to poll; one without it ignores the field and
+     * answers 200 with the finished review, which is reported as 'completed' so
+     * the caller needs no version check.
+     */
+    async submitAgentReview(params: AgentReviewRequest): Promise<AgentReviewSubmission> {
+        const body = this.buildAgentBody(params);
+        body.async = true;
+
+        const response = await fetch(`${API_BASE_URL}/api/review/agent`, {
+            method: 'POST',
+            headers: {
+                ...CLIENT_HEADERS,
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${this.apiKey}`,
+            },
+            body: JSON.stringify(body),
+        });
+
+        if (!response.ok) {
+            await this.throwApiError(response);
+        }
+
+        if (response.status === 202) {
+            const accepted = await response.json() as {
+                reviewId: string;
+                reviewCount?: AgentReviewResponse['reviewCount'];
+            };
+            return { kind: 'accepted', reviewId: accepted.reviewId, reviewCount: accepted.reviewCount };
+        }
+
+        return { kind: 'completed', review: await response.json() as AgentReviewResponse };
+    }
+
+    /**
+     * Fetches the result of an async agent review. A 404 maps to `not_found`
+     * (unknown or expired reviewId) rather than throwing, because a poll issued
+     * immediately after the submit can race the job becoming visible.
+     */
+    async getAgentReviewResult(reviewId: string): Promise<AgentReviewResultResponse> {
+        const response = await fetch(
+            `${API_BASE_URL}/api/review/agent/result/${encodeURIComponent(reviewId)}`,
+            {
+                method: 'GET',
+                headers: {
+                    ...CLIENT_HEADERS,
+                    'Authorization': `Bearer ${this.apiKey}`,
+                },
+            },
+        );
+
+        if (response.status === 404) {
+            return { status: 'not_found' };
+        }
+
+        if (!response.ok) {
+            await this.throwApiError(response);
+        }
+
+        return await response.json() as AgentReviewResultResponse;
     }
 
     async createApiKey(name: string): Promise<ApiKeyCreateResponse> {

@@ -123,7 +123,7 @@ Once configured, just ask your AI assistant naturally:
 | "review my changes" | Reviews uncommitted local changes |
 | "review my branch against main" | Compares current branch against main |
 | "review this diff file" | Reviews an arbitrary patch file |
-| "what's my Optibot status?" | Shows auth method, profile, active org, and daily quota |
+| "what's my Optibot status?" | Shows auth method, active org, and review quota |
 | "which Optibot organizations do I have?" | Lists all orgs (active marked with `*`) |
 | "switch Optibot to the Acme org" | Rescopes your token to that org |
 | "run a security scan on org/repo-a" | Triggers an AI security scan and returns the full report |
@@ -139,8 +139,44 @@ Once configured, just ask your AI assistant naturally:
 | Tool | Description |
 |------|-------------|
 | `review_local_changes` | Review uncommitted local changes (git diff HEAD) |
+| `review_agent` | Agent-mode review of uncommitted local changes — returns structured findings (severity, category, confidence, file and line range), a summary, and an overall pass/fail |
 | `review_branch` | Review changes against a target branch (auto-detects or specify) |
 | `review_diff_file` | Review an arbitrary diff/patch file |
+
+#### Agent review mode (`review_agent`)
+
+`review_agent` is built for a coding-agent host that already holds the working copy and will act on the results. Unlike the prose-style `review_local_changes`, it returns **structured findings**, with no server-side tools — the changed files are front-loaded with the diff so the reviewer has everything it needs. The review is submitted and then polled for, so no single HTTP request has to stay open for the whole review; a backend without the async path answers inline and the tool handles that without any configuration.
+
+Each finding carries an `id`, `severity` (`blocker` / `warning` / `nit`), `category`, `file:line`, `message`, an optional `suggestedFix`, and a `confidence` score (1-10). The `id` labels a finding inside one response. It is **not** stable between runs: the service hashes the reviewer's message into it, and the reviewer rephrases itself on every call. To tell whether a finding from an earlier round is still there, compare the file, the line range, and the category.
+
+The tool answers on two channels at once. The text result opens with a structural severity breakdown for an at-a-glance read, then lists every finding — that is what a host renders for a person. Alongside it, the same review comes back as **structured content**: the tool declares an output schema mirroring the response, so a host reads `status`, `reviewPass`, and the `findings` array as data instead of parsing headings out of markdown. Read whichever suits your host; they describe the same review.
+
+Neither channel asks the host to classify findings as signal or noise, so the MCP and the Optibot skill say the same thing about the same review.
+
+A `suggestedFix` is model output derived from the code under review, which the service treats as untrusted. **Show it to the user and get their agreement before applying it** — the tool description, the output schema, and the rendered text all say so, because the service cannot enforce it and a coding-agent host can edit files unattended.
+
+When a review cannot finish, the tool names which of two things happened: the diff was too large for the reviewer to read, or the service stopped a review that ran too long. Either way it says what to do next rather than passing the server's error text through.
+
+##### Pre-attaching extra context
+
+`review_agent` accepts two optional inputs so you can hand the reviewer context that is not part of the diff:
+
+| Input | Type | Purpose |
+|-------|------|---------|
+| `relatedPaths` | `string[]` | Repo-relative paths of extra files the reviewer should read — callers, interfaces, or tests that the changed code depends on but that are not themselves changed. The tool reads each from disk and sends it as related context. Files that cannot be read (missing, outside the repo, potentially sensitive, or binary) are skipped, and a `Context warnings:` block is prepended to the output naming each one. |
+| `diagnosticsPath` | `string` | Repo-relative path to a local `tsc`/`eslint`/LSP output file. The tool reads it as plain text and passes it to the reviewer as local diagnostics. If it cannot be read, the tool warns and continues rather than failing. |
+
+Both are optional; with neither, the tool behaves exactly as before.
+
+##### Missing context is host-driven
+
+`review_agent` is a **thin, single-shot primitive** — it never loops to fetch more context on its own. When the response includes `missingContext` (files the reviewer needed but was not given), the output lists those paths and prints a call-to-action telling you to **re-call `review_agent` with those paths in `relatedPaths`**, for example:
+
+```
+To let the reviewer see these, call `review_agent` again with `relatedPaths: ["src/db.ts", "src/user.ts"]`. Each re-run spends one review from your quota.
+```
+
+The host (which has an LLM) drives that resubmit — it reads the listed files and re-invokes the tool with `relatedPaths` — so the resubmit decision stays with the host, not buried inside the tool. Each re-run is a separate review and counts once against whatever ceiling applies to your organization.
 
 ### Auth & status
 
@@ -149,7 +185,7 @@ Once configured, just ask your AI assistant naturally:
 | `login` | Authenticate via browser OAuth (handles onboarding redirects; refuses inside CI environments) |
 | `logout` | Remove saved credentials |
 | `check_auth` | Check current authentication status |
-| `get_status` | Full status: auth method, active org, daily quota |
+| `get_status` | Full status: auth method, active org, review quota (or "No daily limit." when none is configured) |
 
 ### Organizations
 
@@ -190,9 +226,11 @@ Once configured, just ask your AI assistant naturally:
 
 ## Real-Time Progress
 
-During reviews and security scans, the MCP server connects to the Optibot backend via WebSocket and emits real-time progress notifications using MCP logging messages. Your MCP client will receive updates as the operation progresses.
+During reviews and security scans, the MCP server emits real-time progress notifications using MCP logging messages. Your MCP client will receive updates as the operation progresses.
 
-**Reviews:**
+`review_agent` is the exception to the shape below: it has no progress socket, because the service runs no tools for it. It reports while it waits for the result instead, so a host can see the call is alive rather than reading a silent minute as a hung tool.
+
+**Reviews** (`review_local_changes`, `review_branch`, `review_diff_file` — over a WebSocket connection to the Optibot backend):
 
 1. **started** — Review request accepted
 2. **analyzing_patch** — Parsing and analyzing the diff

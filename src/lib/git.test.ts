@@ -19,10 +19,15 @@ import {
     readDiffFile,
     getChangedFiles,
     getFileContents,
+    getRelatedFileContents,
+    readDiagnosticsFile,
     getRemoteBranches,
     detectBaseBranch,
     checkMergeConflicts,
     assertSafeRefName,
+    createUploadBudget,
+    screenReadablePath,
+    looksBinary,
 } from './git.js';
 
 const execMock = vi.mocked(exec);
@@ -347,6 +352,14 @@ describe('getChangedFiles', () => {
 });
 
 describe('getFileContents', () => {
+    beforeEach(() => {
+        // The budget is checked from the directory entry before the read, so
+        // stat has to answer for every candidate file, and the shared path
+        // gate resolves both the root and the candidate through realpath.
+        vi.mocked(fs.stat).mockResolvedValue({ size: 1024 } as never);
+        vi.mocked(fs.realpath).mockImplementation((async (p: unknown) => path.resolve(String(p))) as never);
+    });
+
     it('reads contents for modified files', async () => {
         const mockHandle = {
             read: vi.fn(async (buf: Buffer) => {
@@ -398,6 +411,262 @@ describe('getFileContents', () => {
             '/repo'
         );
         expect(result).toEqual({});
+    });
+});
+
+describe('getRelatedFileContents', () => {
+    beforeEach(() => {
+        vi.mocked(fs.readFile).mockReset();
+        // The budget is checked from the directory entry before the read, so
+        // stat has to answer for every candidate.
+        vi.mocked(fs.stat).mockResolvedValue({ size: 1024 } as never);
+        // Containment resolves both the root and the candidate through
+        // realpath. Default to a lexical resolution so the tests behave like
+        // paths with no symlinks; the symlink test overrides this.
+        vi.mocked(fs.realpath).mockImplementation((async (p: unknown) => path.resolve(String(p))) as never);
+    });
+
+    it('reads each related path and keys contents by repo-relative path', async () => {
+        vi.mocked(fs.readFile).mockImplementation(async (p: any) => {
+            if (String(p).endsWith('caller.ts')) return 'caller source';
+            if (String(p).endsWith('iface.ts')) return 'interface source';
+            throw new Error('unexpected');
+        });
+
+        const { contents, warnings } = await getRelatedFileContents(
+            ['src/caller.ts', 'src/iface.ts'],
+            '/repo'
+        );
+
+        expect(contents).toEqual({
+            'src/caller.ts': 'caller source',
+            'src/iface.ts': 'interface source',
+        });
+        expect(warnings).toEqual([]);
+    });
+
+    it('warns and skips unreadable paths but keeps the readable ones', async () => {
+        vi.mocked(fs.readFile).mockImplementation(async (p: any) => {
+            if (String(p).endsWith('present.ts')) return 'ok';
+            throw new Error('ENOENT');
+        });
+
+        const { contents, warnings } = await getRelatedFileContents(
+            ['src/present.ts', 'src/missing.ts'],
+            '/repo'
+        );
+
+        expect(contents).toEqual({ 'src/present.ts': 'ok' });
+        expect(warnings).toHaveLength(1);
+        expect(warnings[0]).toContain('Could not read related file: src/missing.ts');
+    });
+
+    it('warns and skips paths that escape the repo root', async () => {
+        const { contents, warnings } = await getRelatedFileContents(
+            ['../outside.ts'],
+            '/repo'
+        );
+
+        expect(contents).toEqual({});
+        expect(warnings[0]).toContain('not a readable file inside the repository');
+        expect(fs.readFile).not.toHaveBeenCalled();
+    });
+
+    it('refuses an absolute path and a home-relative path', async () => {
+        const { contents, warnings } = await getRelatedFileContents(
+            ['/etc/passwd', '~/.ssh/id_rsa'],
+            '/repo'
+        );
+
+        expect(contents).toEqual({});
+        expect(warnings).toHaveLength(2);
+        expect(fs.readFile).not.toHaveBeenCalled();
+    });
+
+    it('skips an oversized file without reading it into memory', async () => {
+        vi.mocked(fs.stat).mockResolvedValue({ size: 26 * 1024 * 1024 } as never);
+
+        const { contents, warnings } = await getRelatedFileContents(['big.log'], '/repo');
+
+        expect(contents).toEqual({});
+        expect(warnings[0]).toContain('upload budget');
+        expect(fs.readFile).not.toHaveBeenCalled();
+    });
+
+    it('refuses a symlink whose target is a sensitive file inside the repo', async () => {
+        // Containment passes — the target is inside the repository — so only
+        // checking the resolved name stops `.env` being read and uploaded.
+        vi.mocked(fs.realpath).mockImplementation((async (p: unknown) =>
+            String(p).endsWith('notes.md') ? '/repo/.env' : path.resolve(String(p))) as never);
+
+        const { contents, warnings } = await getRelatedFileContents(['notes.md'], '/repo');
+
+        expect(contents).toEqual({});
+        expect(warnings[0]).toContain('sensitive');
+        expect(fs.readFile).not.toHaveBeenCalled();
+    });
+
+    it('refuses a symlink whose target is a binary file inside the repo', async () => {
+        vi.mocked(fs.realpath).mockImplementation((async (p: unknown) =>
+            String(p).endsWith('notes.md') ? '/repo/assets/logo.png' : path.resolve(String(p))) as never);
+
+        const { contents, warnings } = await getRelatedFileContents(['notes.md'], '/repo');
+
+        expect(contents).toEqual({});
+        expect(warnings[0]).toContain('binary');
+        expect(fs.readFile).not.toHaveBeenCalled();
+    });
+
+    it('refuses a symlink inside the repo whose target escapes it', async () => {
+        // The lexical check passes for this path; only realpath exposes that
+        // the link resolves outside the repository.
+        vi.mocked(fs.realpath).mockImplementation((async (p: unknown) =>
+            String(p).endsWith('notes.md') ? '/Users/someone/.ssh/id_rsa' : path.resolve(String(p))) as never);
+
+        const { contents, warnings } = await getRelatedFileContents(['notes.md'], '/repo');
+
+        expect(contents).toEqual({});
+        expect(warnings[0]).toContain('not a readable file inside the repository');
+        expect(fs.readFile).not.toHaveBeenCalled();
+    });
+
+    it('warns and skips potentially sensitive related files', async () => {
+        const { contents, warnings } = await getRelatedFileContents(
+            ['.env'],
+            '/repo'
+        );
+
+        expect(contents).toEqual({});
+        expect(warnings[0]).toContain('sensitive');
+        expect(fs.readFile).not.toHaveBeenCalled();
+    });
+
+    it('warns and skips binary related files (by extension)', async () => {
+        const { contents, warnings } = await getRelatedFileContents(
+            ['assets/logo.png'],
+            '/repo'
+        );
+
+        expect(contents).toEqual({});
+        expect(warnings[0]).toContain('binary');
+        expect(fs.readFile).not.toHaveBeenCalled();
+    });
+
+    it('warns and skips related files whose content carries a NUL byte', async () => {
+        vi.mocked(fs.readFile).mockResolvedValue('text\u0000more');
+
+        const { contents, warnings } = await getRelatedFileContents(
+            ['src/weird.ts'],
+            '/repo'
+        );
+
+        expect(contents).toEqual({});
+        expect(warnings[0]).toContain('binary');
+    });
+
+    it('ignores blank path entries', async () => {
+        const { contents, warnings } = await getRelatedFileContents(
+            ['   ', ''],
+            '/repo'
+        );
+
+        expect(contents).toEqual({});
+        expect(warnings).toEqual([]);
+        expect(fs.readFile).not.toHaveBeenCalled();
+    });
+});
+
+describe('readDiagnosticsFile', () => {
+    beforeEach(() => {
+        vi.mocked(fs.readFile).mockReset();
+        vi.mocked(fs.realpath).mockImplementation((async (p: unknown) => path.resolve(String(p))) as never);
+        vi.mocked(fs.stat).mockResolvedValue({ size: 1024 } as never);
+    });
+
+    it('reads a diagnostics file within the repo as plain text', async () => {
+        vi.mocked(fs.readFile).mockResolvedValue('tsc: 3 errors');
+
+        const text = await readDiagnosticsFile('build/tsc.log', '/repo');
+        expect(text).toBe('tsc: 3 errors');
+        expect(fs.readFile).toHaveBeenCalledWith(path.resolve('/repo', 'build/tsc.log'), 'utf-8');
+    });
+
+    it('rejects a diagnostics path that escapes the repo root', async () => {
+        await expect(readDiagnosticsFile('../../etc/passwd', '/repo')).rejects.toThrow(
+            'must be a readable file within the repository'
+        );
+        expect(fs.readFile).not.toHaveBeenCalled();
+    });
+
+    it('rejects a path carrying a NUL, which would truncate in the read', async () => {
+        await expect(readDiagnosticsFile('valid.log\u0000../../etc/passwd', '/repo')).rejects.toThrow(
+            'must be a readable file within the repository'
+        );
+        expect(fs.readFile).not.toHaveBeenCalled();
+    });
+
+    it('refuses a symlink inside the repo whose target escapes it', async () => {
+        vi.mocked(fs.realpath).mockImplementation((async (p: unknown) =>
+            String(p).endsWith('tsc.log') ? '/Users/someone/.ssh/id_rsa' : path.resolve(String(p))) as never);
+
+        await expect(readDiagnosticsFile('build/tsc.log', '/repo')).rejects.toThrow(
+            'must be a readable file within the repository'
+        );
+        expect(fs.readFile).not.toHaveBeenCalled();
+    });
+
+    it('refuses a symlink whose target is a sensitive file inside the repo', async () => {
+        vi.mocked(fs.realpath).mockImplementation((async (p: unknown) =>
+            String(p).endsWith('tsc.log') ? '/repo/id_rsa' : path.resolve(String(p))) as never);
+
+        await expect(readDiagnosticsFile('build/tsc.log', '/repo')).rejects.toThrow('potentially sensitive');
+        expect(fs.readFile).not.toHaveBeenCalled();
+    });
+
+    it('refuses a sensitive file, which would otherwise be uploaded as text', async () => {
+        await expect(readDiagnosticsFile('.env', '/repo')).rejects.toThrow('potentially sensitive');
+        expect(fs.readFile).not.toHaveBeenCalled();
+    });
+
+    it('refuses a binary file', async () => {
+        await expect(readDiagnosticsFile('build/output.png', '/repo')).rejects.toThrow('looks binary');
+        expect(fs.readFile).not.toHaveBeenCalled();
+    });
+
+    it('refuses a text-named file whose content carries a NUL', async () => {
+        // An extension proves nothing: a .log full of binary is not the text
+        // output this field is for.
+        vi.mocked(fs.readFile).mockResolvedValue('tsc\u0000binary');
+
+        await expect(readDiagnosticsFile('build/tsc.log', '/repo')).rejects.toThrow('looks binary');
+    });
+
+    it('refuses a file larger than the upload cap', async () => {
+        vi.mocked(fs.stat).mockResolvedValue({ size: 26 * 1024 * 1024 } as never);
+        await expect(readDiagnosticsFile('build/tsc.log', '/repo')).rejects.toThrow('upload budget');
+        expect(fs.readFile).not.toHaveBeenCalled();
+    });
+
+    it('refuses when the decoded length overruns the budget the stat size fitted', async () => {
+        // stat reports the on-disk size; invalid UTF-8 decodes to replacement
+        // characters that are longer, so the decoded length is re-checked.
+        const budget = createUploadBudget(10);
+        vi.mocked(fs.stat).mockResolvedValue({ size: 10 } as never);
+        vi.mocked(fs.readFile).mockResolvedValue('\uFFFD\uFFFD\uFFFD\uFFFD\uFFFD');
+
+        await expect(readDiagnosticsFile('a.log', '/repo', budget)).rejects.toThrow('upload budget');
+        expect(budget.remaining()).toBe(10);
+    });
+
+    it('spends from the shared budget, so diagnostics cannot double the cap', async () => {
+        const budget = createUploadBudget(10);
+        vi.mocked(fs.stat).mockResolvedValue({ size: 10 } as never);
+        vi.mocked(fs.readFile).mockResolvedValue('0123456789');
+
+        await expect(readDiagnosticsFile('a.log', '/repo', budget)).resolves.toBe('0123456789');
+        expect(budget.remaining()).toBe(0);
+        // The budget is now spent, so a second read of the same size is refused.
+        await expect(readDiagnosticsFile('b.log', '/repo', budget)).rejects.toThrow('upload budget');
     });
 });
 
@@ -516,5 +785,141 @@ describe('checkMergeConflicts', () => {
 
     it('rejects unsafe target branch names before invoking git', async () => {
         await expect(checkMergeConflicts('--exec=evil', '/repo')).rejects.toThrow('Invalid branch name');
+    });
+});
+
+describe('createUploadBudget', () => {
+    it('spends against one cap across several calls', () => {
+        const budget = createUploadBudget(100);
+        expect(budget.canFit(60)).toBe(true);
+        budget.spend(60);
+        expect(budget.remaining()).toBe(40);
+        expect(budget.canFit(60)).toBe(false);
+        expect(budget.canFit(40)).toBe(true);
+    });
+
+    it('holds the total when the changed files and the related files share it', async () => {
+        // The point of the shared budget: separately, each read could take the
+        // whole cap, so one request carried twice it.
+        const budget = createUploadBudget(10);
+        vi.mocked(fs.realpath).mockImplementation((async (p: unknown) => path.resolve(String(p))) as never);
+        vi.mocked(fs.lstat).mockResolvedValue({ isSymbolicLink: () => false } as never);
+        vi.mocked(fs.stat).mockResolvedValue({ size: 10 } as never);
+        vi.mocked(fs.readFile).mockResolvedValue('0123456789');
+
+        mockExecFile('');
+        const first = await getRelatedFileContents(['a.ts'], '/repo', budget);
+        const second = await getRelatedFileContents(['b.ts'], '/repo', budget);
+
+        expect(Object.keys(first.contents)).toEqual(['a.ts']);
+        expect(Object.keys(second.contents)).toEqual([]);
+        expect(second.warnings.join(' ')).toContain('upload');
+    });
+});
+
+describe('screenReadablePath — the shared gate', () => {
+    beforeEach(() => {
+        vi.mocked(fs.realpath).mockImplementation((async (p: unknown) => path.resolve(String(p))) as never);
+    });
+
+    it('accepts an ordinary repo-relative path', async () => {
+        await expect(screenReadablePath('src/db.ts', '/repo')).resolves.toEqual({
+            ok: true, absolutePath: path.join('/repo', 'src/db.ts'),
+        });
+    });
+
+    it('refuses a path that leaves the repository', async () => {
+        await expect(screenReadablePath('../../.env', '/repo')).resolves.toEqual({ ok: false, reason: 'outside' });
+    });
+
+    it('refuses a sensitive name as requested', async () => {
+        await expect(screenReadablePath('.env', '/repo')).resolves.toEqual({ ok: false, reason: 'sensitive' });
+    });
+
+    it('refuses a symlink whose resolved name is sensitive', async () => {
+        // The whole point of the gate: containment passes, and only the
+        // resolved name gives the link away.
+        vi.mocked(fs.realpath).mockImplementation((async (p: unknown) =>
+            String(p).endsWith('notes.md') ? '/repo/.env' : path.resolve(String(p))) as never);
+        await expect(screenReadablePath('notes.md', '/repo')).resolves.toEqual({ ok: false, reason: 'sensitive' });
+    });
+
+    it('refuses a symlink whose resolved name is binary', async () => {
+        vi.mocked(fs.realpath).mockImplementation((async (p: unknown) =>
+            String(p).endsWith('notes.md') ? '/repo/logo.png' : path.resolve(String(p))) as never);
+        await expect(screenReadablePath('notes.md', '/repo')).resolves.toEqual({ ok: false, reason: 'binary' });
+    });
+});
+
+describe('every reader refuses a symlink to a secret', () => {
+    // One test per reader, because the guard was written into one and missed
+    // in another five times before they shared a gate.
+    beforeEach(() => {
+        vi.mocked(fs.stat).mockResolvedValue({ size: 16 } as never);
+        vi.mocked(fs.readFile).mockResolvedValue('secret content');
+        vi.mocked(fs.realpath).mockImplementation((async (p: unknown) =>
+            String(p).endsWith('notes.md') ? '/repo/.env' : path.resolve(String(p))) as never);
+    });
+
+    it('getFileContents', async () => {
+        mockExecFile('');
+        const contents = await getFileContents(
+            [{ relativePath: 'notes.md', status: 'M' }],
+            '/repo',
+        );
+        expect(contents).toEqual({});
+        expect(fs.readFile).not.toHaveBeenCalled();
+    });
+
+    it('getRelatedFileContents', async () => {
+        const { contents } = await getRelatedFileContents(['notes.md'], '/repo');
+        expect(contents).toEqual({});
+        expect(fs.readFile).not.toHaveBeenCalled();
+    });
+
+    it('readDiagnosticsFile', async () => {
+        await expect(readDiagnosticsFile('notes.md', '/repo')).rejects.toThrow('sensitive');
+        expect(fs.readFile).not.toHaveBeenCalled();
+    });
+});
+
+describe('looksBinary — one rule for every reader', () => {
+    it('accepts ordinary source text', () => {
+        expect(looksBinary('export const x = 1;\n// note\n')).toBe(false);
+    });
+
+    it('rejects a NUL byte', () => {
+        expect(looksBinary('text\u0000more')).toBe(true);
+    });
+
+    it('rejects dense control bytes that carry no NUL', () => {
+        // The case the NUL-only check let through: bytes 1-8 with no NUL.
+        const dense = Array.from({ length: 200 }, (_, i) => String.fromCharCode((i % 8) + 1)).join('');
+        expect(looksBinary(dense)).toBe(true);
+    });
+
+    it('accepts empty text', () => {
+        expect(looksBinary('')).toBe(false);
+    });
+});
+
+describe('the readers share the binary rule', () => {
+    beforeEach(() => {
+        vi.mocked(fs.realpath).mockImplementation((async (p: unknown) => path.resolve(String(p))) as never);
+        vi.mocked(fs.stat).mockResolvedValue({ size: 200 } as never);
+        // Dense control bytes, no NUL — passed the old NUL-only check.
+        vi.mocked(fs.readFile).mockResolvedValue(
+            Array.from({ length: 200 }, (_, i) => String.fromCharCode((i % 8) + 1)).join(''),
+        );
+    });
+
+    it('getRelatedFileContents skips it', async () => {
+        const { contents, warnings } = await getRelatedFileContents(['notes.txt'], '/repo');
+        expect(contents).toEqual({});
+        expect(warnings[0]).toContain('binary');
+    });
+
+    it('readDiagnosticsFile refuses it', async () => {
+        await expect(readDiagnosticsFile('tsc.log', '/repo')).rejects.toThrow('looks binary');
     });
 });

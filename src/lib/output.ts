@@ -1,4 +1,10 @@
-import { ReviewResponse, ParsedFileComment } from '../types.js';
+import {
+    ReviewResponse,
+    ParsedFileComment,
+    AgentReviewResponse,
+    AgentReviewFinding,
+    FindingSeverity,
+} from '../types.js';
 
 const FILE_COMMENT_REGEX = /---start-file-comment---(.+?)-\/-(\d+)-\/-(\d+)---\n([\s\S]*?)(?:\n---end-file-comment---|$)/g;
 
@@ -52,6 +58,80 @@ export function parseFileComments(fileComments: string[]): ParsedFileComment[] {
     return parsed;
 }
 
+/**
+ * Wraps text in an inline code span that survives a backtick inside it.
+ *
+ * Markdown lets a code span use more backticks than its content contains, so
+ * the fence is widened to one longer than the longest run in the text. The
+ * paths here come from the service, and sanitizeServerText removes control
+ * characters rather than markdown.
+ */
+function inlineCode(text: string): string {
+    // Line endings collapse to spaces first. A widened fence solves a backtick
+    // collision, but markdown resolves block structure before inline spans, so
+    // a blank line inside the text ends the list item outright and whatever
+    // follows it — a heading, a rule, a fake findings section — is parsed as
+    // real structure. CommonMark treats a line ending inside a code span as a
+    // space anyway, so this matches what an intact span would have rendered.
+    const flattened = text.replace(/[\r\n]+/g, ' ');
+    const longestRun = (flattened.match(/`+/g) ?? []).reduce((max, run) => Math.max(max, run.length), 0);
+    const fence = '`'.repeat(longestRun + 1);
+    const padding = flattened.startsWith('`') || flattened.endsWith('`') ? ' ' : '';
+    return `${fence}${padding}${flattened}${padding}${fence}`;
+}
+
+/**
+ * Recursively returns `value` with every string in it sanitized.
+ *
+ * A named list of fields was the obvious way to write this and the wrong one:
+ * anything the service adds later rides through untouched until someone
+ * remembers to extend the list, and the service is a separate codebase that
+ * evolves on its own schedule. Walking the structure means a field this client
+ * has never heard of is still cleaned. Non-strings are returned as they are.
+ */
+function deepSanitize<T>(value: T): T {
+    if (typeof value === 'string') return sanitizeServerText(value) as unknown as T;
+    if (Array.isArray(value)) return value.map((item) => deepSanitize(item)) as unknown as T;
+    if (value !== null && typeof value === 'object') {
+        // Null-prototype: the keys come from the service, and an own
+        // `__proto__` key on a plain object would set the result's prototype.
+        // buildAgentBody guards the same way for the same reason.
+        const out: Record<string, unknown> = Object.create(null);
+        for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+            out[key] = deepSanitize(item);
+        }
+        return out as unknown as T;
+    }
+    return value;
+}
+
+/**
+ * Returns the review with every backend-supplied string stripped of ANSI
+ * escapes and control characters.
+ *
+ * The rendered markdown sanitizes each field as it interpolates it, but the
+ * structured payload is handed to the host as data, and this repo's rule is
+ * that any string the service returns is sanitized before it enters a tool
+ * result — both channels are the tool result. Without this, a reviewer that
+ * quotes attacker-authored source back in a finding message reaches a host
+ * with cursor, screen-clearing, and OSC 52 clipboard sequences intact.
+ */
+export function sanitizeAgentReviewResponse(response: AgentReviewResponse): AgentReviewResponse {
+    return deepSanitize(response);
+}
+
+export function hasReviewQuota(
+    rc: { current?: number; limit?: number; remaining?: number } | undefined,
+): rc is { current: number; limit: number; remaining: number; resetAt?: string } {
+    if (!rc) return false;
+    // `remaining` is checked as well as narrowed: the footer interpolates all
+    // three, so a response carrying current and limit but no remaining would
+    // otherwise render "(undefined remaining)".
+    if (typeof rc.current !== 'number' || typeof rc.limit !== 'number' || typeof rc.remaining !== 'number') return false;
+    if (!Number.isFinite(rc.limit) || !Number.isFinite(rc.current) || !Number.isFinite(rc.remaining)) return false;
+    return rc.limit < Number.MAX_SAFE_INTEGER;
+}
+
 export function formatReview(response: ReviewResponse): string {
     const lines: string[] = [];
 
@@ -72,13 +152,177 @@ export function formatReview(response: ReviewResponse): string {
         }
     }
 
-    if (response.reviewCount) {
+    if (hasReviewQuota(response.reviewCount)) {
         const rc = response.reviewCount;
         let line = `Reviews used: ${rc.current}/${rc.limit} (${rc.remaining} remaining)`;
         if (rc.resetAt) {
             line += ` · Resets ${formatResetTime(rc.resetAt)}`;
         }
         lines.push(`---`, line);
+    }
+
+    return lines.join('\n');
+}
+
+const SEVERITY_LABEL: Record<FindingSeverity, string> = {
+    blocker: 'Blocker',
+    warning: 'Warning',
+    nit: 'Nit',
+};
+
+const SEVERITY_ORDER: FindingSeverity[] = ['blocker', 'warning', 'nit'];
+
+/**
+ * Render a lightweight text bar (filled/empty blocks) for the given fraction of
+ * a total. Used for the structural severity breakdown the host reads at a glance.
+ */
+function severityBar(count: number, total: number, width = 18): string {
+    if (total <= 0) return '░'.repeat(width);
+    const filled = Math.round((count / total) * width);
+    return '▓'.repeat(filled) + '░'.repeat(width - filled);
+}
+
+function formatLineRange(startLine: number, endLine: number): string {
+    return startLine === endLine ? `${startLine}` : `${startLine}-${endLine}`;
+}
+
+function formatFinding(finding: AgentReviewFinding, index: number): string[] {
+    const lines: string[] = [];
+    // The fallback is the service's own string when it is not one of the three
+    // known severities, so it is sanitized like every other field it could
+    // reach the heading through.
+    const sev = SEVERITY_LABEL[finding.severity] ?? sanitizeServerText(String(finding.severity ?? ''));
+    const loc = `${sanitizeServerText(finding.file)}:${formatLineRange(finding.startLine, finding.endLine)}`;
+    const patchNote = finding.inPatch ? '' : ' _(outside the changed lines)_';
+
+    lines.push(`### ${index}. [${sev} · ${sanitizeServerText(finding.category)}] ${loc}${patchNote}`);
+    lines.push('');
+    // Same reasoning as the missingContext paths: the id is derived from the
+    // reviewer's own wording, which quotes the code under review, so it can
+    // carry a backtick that would close the span early.
+    lines.push(`- **id:** ${inlineCode(sanitizeServerText(String(finding.id ?? '')))}`);
+    lines.push(`- **confidence:** ${finding.confidence}/10`);
+    lines.push('');
+    lines.push(sanitizeServerText(finding.message));
+
+    if (finding.suggestedFix && finding.suggestedFix.trim()) {
+        lines.push('');
+        // A suggested fix is model output derived from the reviewed code,
+        // which the service treats as untrusted — it may include code someone
+        // else wrote. The service says plainly that it cannot enforce this
+        // rule, and the consumer here is an agent that can edit files without
+        // being asked, so the obligation is stated next to every fix.
+        lines.push('**Suggested fix** — show it to the user and get their agreement before applying it:');
+        lines.push('');
+        // The fence widens past the longest backtick run in the fix, for the
+        // same reason inlineCode does: a fenced block closes at the first line
+        // carrying at least as many backticks as opened it, so a fix that
+        // contains a fenced example — or source crafted to contain one — would
+        // otherwise end the block early and let everything after it parse as
+        // markdown. This is the field the comment above calls the highest-stakes
+        // one, since a host may apply it unattended.
+        const fixText = sanitizeServerText(finding.suggestedFix);
+        const longestFixRun = (fixText.match(/`+/g) ?? []).reduce((max, run) => Math.max(max, run.length), 0);
+        const fixFence = '`'.repeat(Math.max(3, longestFixRun + 1));
+        lines.push(fixFence);
+        lines.push(fixText);
+        lines.push(fixFence);
+    }
+
+    lines.push('');
+    return lines;
+}
+
+/**
+ * Render an agent-mode review as readable markdown for a coding-agent host.
+ *
+ * This renders a structural severity breakdown for an at-a-glance read, then
+ * every finding. It does not ask the host to classify the findings as signal or
+ * noise: the production skill dropped that self-report, and the two hosts say
+ * the same thing about the same review.
+ */
+export function formatAgentReview(response: AgentReviewResponse): string {
+    const lines: string[] = [];
+    const findings = Array.isArray(response.findings) ? response.findings : [];
+    const total = findings.length;
+
+    const statusLabel = response.status === 'looks_good' ? 'Looks good ✅' : 'Needs changes';
+    lines.push(`## Optibot agent review — ${statusLabel}`);
+    lines.push('');
+    lines.push(`Pass: ${response.reviewPass ? 'yes' : 'no'} · Findings: ${total}`);
+    if (response.meta) {
+        const parts: string[] = [`mode: ${response.meta.mode}`, `${(response.meta.durationMs / 1000).toFixed(1)}s`];
+        if (response.meta.model) parts.push(`model: ${sanitizeServerText(response.meta.model)}`);
+        if (response.meta.provider) parts.push(`provider: ${sanitizeServerText(response.meta.provider)}`);
+        lines.push(`_(${parts.join(' · ')})_`);
+    }
+    lines.push('');
+
+    if (response.summary && response.summary.trim()) {
+        lines.push('### Summary');
+        lines.push('');
+        lines.push(sanitizeServerText(response.summary));
+        lines.push('');
+    }
+
+    // Structural severity breakdown — a bar the host can read directly.
+    const counts: Record<FindingSeverity, number> = { blocker: 0, warning: 0, nit: 0 };
+    for (const f of findings) {
+        if (f.severity in counts) counts[f.severity] += 1;
+    }
+    lines.push('### Severity breakdown');
+    lines.push('');
+    lines.push('```');
+    for (const sev of SEVERITY_ORDER) {
+        const c = counts[sev];
+        const pct = total > 0 ? Math.round((c / total) * 100) : 0;
+        const label = SEVERITY_LABEL[sev].padEnd(8);
+        lines.push(`${label} ${severityBar(c, total)}  ${String(pct).padStart(3)}%   ${c}/${total}`);
+    }
+    lines.push('```');
+    lines.push('');
+
+    if (total === 0) {
+        lines.push('No findings.');
+    } else {
+        lines.push('### Findings');
+        lines.push('');
+        findings.forEach((finding, i) => {
+            lines.push(...formatFinding(finding, i + 1));
+        });
+
+    }
+
+    if (response.missingContext && response.missingContext.length > 0) {
+        const missing = response.missingContext.map(f => sanitizeServerText(f));
+        lines.push('');
+        lines.push('### Missing context — re-run for a sharper review');
+        lines.push('');
+        lines.push('The reviewer needed these files but was not given them:');
+        lines.push('');
+        for (const file of missing) {
+            // Fenced rather than backtick-wrapped: sanitizeServerText strips
+            // control characters, not markdown, and a server-supplied path
+            // containing a backtick would otherwise break out of the code span.
+            lines.push(`- ${inlineCode(file)}`);
+        }
+        lines.push('');
+        // Host-driven resubmit: the tool is a thin single-shot primitive and
+        // does NOT loop on its own. The host re-calls `review_agent`, passing
+        // the missing files back through the `relatedPaths` input.
+        const pathsLiteral = missing.map(f => JSON.stringify(f)).join(', ');
+        lines.push(`To let the reviewer see these, call \`review_agent\` again with ${inlineCode(`relatedPaths: [${pathsLiteral}]`)}. Each re-run spends one review from your quota.`);
+    }
+
+    if (hasReviewQuota(response.reviewCount)) {
+        const rc = response.reviewCount;
+        let line = `Reviews used: ${rc.current}/${rc.limit} (${rc.remaining} remaining)`;
+        if (rc.resetAt) {
+            line += ` · Resets ${formatResetTime(rc.resetAt)}`;
+        }
+        lines.push('');
+        lines.push('---');
+        lines.push(line);
     }
 
     return lines.join('\n');
