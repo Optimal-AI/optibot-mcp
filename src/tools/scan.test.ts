@@ -131,9 +131,8 @@ describe('scan tools', () => {
     });
 
     describe('get_security_pricing', () => {
-        it('renders all three tiers with markup', async () => {
+        it('renders all three tiers', async () => {
             mockGetSecurityPricing.mockResolvedValue({
-                markupMultiplier: 1.3,
                 tiers: {
                     low: { inputCostPer1M: 1, outputCostPer1M: 2, cacheReadCostPer1M: 0.1, cacheWriteCostPer1M: 0.2 },
                     medium: { inputCostPer1M: 3, outputCostPer1M: 4, cacheReadCostPer1M: 0.3, cacheWriteCostPer1M: 0.4 },
@@ -142,7 +141,6 @@ describe('scan tools', () => {
             });
             const result = await registered.get('get_security_pricing')!({}, {});
             const text = result.content[0].text ?? '';
-            expect(text).toContain('1.3x');
             expect(text).toContain('## low tier');
             expect(text).toContain('## medium tier');
             expect(text).toContain('## high tier');

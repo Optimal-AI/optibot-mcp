@@ -444,7 +444,7 @@ export function registerScanTools(server: McpServer): void {
     // Tool: get_security_pricing
     server.tool(
         'get_security_pricing',
-        'Show per-tier pricing and markup multiplier for security scans.',
+        'Show per-tier pricing for security scans.',
         async () => {
             const ctx = await getAuthedContext();
             if (isErrorResult(ctx)) return ctx;
@@ -453,8 +453,6 @@ export function registerScanTools(server: McpServer): void {
                 const pricing = await ctx.client.getSecurityPricing();
                 const lines: string[] = [
                     'Security scan pricing:',
-                    '',
-                    `Markup multiplier: ${pricing.markupMultiplier}x (applied on top of raw model cost)`,
                     '',
                 ];
                 for (const tier of ['low', 'medium', 'high'] as const) {

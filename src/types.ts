@@ -278,7 +278,6 @@ export interface ScanPricingTier {
 }
 
 export interface ScanPricingResponse {
-    markupMultiplier: number;
     tiers: {
         low: ScanPricingTier;
         medium: ScanPricingTier;
