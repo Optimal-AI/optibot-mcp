@@ -129,8 +129,6 @@ const AgentReviewOutputSchema = {
     meta: z.object({
         mode: z.string(),
         durationMs: z.number(),
-        model: z.string().optional(),
-        provider: z.string().optional(),
     }).optional(),
     warnings: z.array(z.string()).optional()
         .describe('Context files the tool could not read or refused to read.'),

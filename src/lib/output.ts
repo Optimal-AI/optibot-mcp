@@ -252,8 +252,6 @@ export function formatAgentReview(response: AgentReviewResponse): string {
     lines.push(`Pass: ${response.reviewPass ? 'yes' : 'no'} · Findings: ${total}`);
     if (response.meta) {
         const parts: string[] = [`mode: ${response.meta.mode}`, `${(response.meta.durationMs / 1000).toFixed(1)}s`];
-        if (response.meta.model) parts.push(`model: ${sanitizeServerText(response.meta.model)}`);
-        if (response.meta.provider) parts.push(`provider: ${sanitizeServerText(response.meta.provider)}`);
         lines.push(`_(${parts.join(' · ')})_`);
     }
     lines.push('');

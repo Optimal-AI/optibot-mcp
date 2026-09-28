@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+
+- `review_agent` output describes a review's `meta` as `mode` and `durationMs`, in both the rendered text and the declared output schema.
+
 ## [1.6.0] - 2026-09-16
 
 ### Added
