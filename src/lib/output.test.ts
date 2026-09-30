@@ -343,7 +343,7 @@ describe('sanitizeAgentReviewResponse', () => {
         reviewPass: false,
         summary: `summary${evil}`,
         missingContext: [`ctx${evil}.ts`],
-        meta: { mode: 'agent', durationMs: 1, model: `model${evil}`, provider: `prov${evil}` },
+        meta: { mode: 'agent', durationMs: 1 },
         findings: [{
             id: `AF${evil}`,
             file: `a${evil}.ts`,
@@ -364,8 +364,6 @@ describe('sanitizeAgentReviewResponse', () => {
         const values = [
             clean.summary,
             clean.missingContext![0],
-            clean.meta!.model!,
-            clean.meta!.provider!,
             f.id, f.file, f.message, f.suggestedFix!,
         ];
         for (const value of values) {
@@ -589,10 +587,10 @@ describe('formatAgentReview', () => {
         expect(out).toContain('Reviews used: 1/50 (49 remaining)');
     });
 
-    it('echoes model and provider from meta when present', () => {
-        const out = formatAgentReview(makeResponse({ meta: { mode: 'agent', durationMs: 5000, model: 'claude-sonnet-5', provider: 'anthropic' } }));
-        expect(out).toContain('model: claude-sonnet-5');
-        expect(out).toContain('provider: anthropic');
+    it('renders the mode and duration from meta', () => {
+        const out = formatAgentReview(makeResponse({ meta: { mode: 'agent', durationMs: 5000 } }));
+
+        expect(out).toContain('_(mode: agent · 5.0s)_');
     });
 
     it('sanitizes control chars in server-supplied finding text', () => {

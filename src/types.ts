@@ -75,11 +75,7 @@ export interface AgentReviewResponse {
      */
     reviewCount?: ReviewStatus;
     isOptibotInstalled?: boolean;
-    /**
-     * `model`/`provider` name the model that produced the findings. The
-     * service always sends both.
-     */
-    meta?: { mode: 'agent'; durationMs: number; model?: string; provider?: string };
+    meta?: { mode: 'agent'; durationMs: number };
 }
 
 /**
