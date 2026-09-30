@@ -8,6 +8,7 @@
 - `get_status` reports an authentication error when the service rejects the key, instead of a partial status.
 - Scan pricing output shows prices only.
 - Updated dependencies; `npm audit` reports no known advisories.
+- Smaller published package.
 
 ### Security
 
@@ -16,6 +17,7 @@
 ### Fixed
 
 - `get_security_scan` on an unknown scan id suggests `list_security_scans`.
+- Tool descriptions and progress notifications describe what each tool does rather than how the service works.
 
 ### Documentation
 
