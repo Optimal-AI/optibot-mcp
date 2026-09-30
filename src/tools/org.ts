@@ -64,7 +64,7 @@ export function registerOrgTools(server: McpServer): void {
     // Tool: get_current_organization
     server.tool(
         'get_current_organization',
-        'Show the currently active Optibot organization and your role in it. Read from the JWT organizationId claim (the authoritative source).',
+        'Show the currently active Optibot organization and your role in it.',
         async () => {
             try {
                 const config = await readConfig();

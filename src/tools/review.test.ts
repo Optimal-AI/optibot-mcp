@@ -741,19 +741,14 @@ describe('review tools', () => {
                 .toBe('[progress] Analyzing patch (5 files)');
         });
 
-        it('formats tool_call step with tool name', () => {
-            expect(formatProgressStep({ step: 'tool_call', message: '', details: { tool: 'lint' } }))
-                .toBe('[progress] Running tool: lint');
+        it('reports a tool_call step as a generic stage, without the tool name or query', () => {
+            expect(formatProgressStep({ step: 'tool_call', message: '', details: { tool: 'search', query: 'password' } }))
+                .toBe('[progress] Analyzing code');
         });
 
-        it('formats tool_call step with tool and query', () => {
-            expect(formatProgressStep({ step: 'tool_call', message: '', details: { tool: 'search', query: 'foo' } }))
-                .toBe('[progress] Running tool: search \u2014 foo');
-        });
-
-        it('formats tool_call step without details', () => {
+        it('reports a tool_call step without details the same way', () => {
             expect(formatProgressStep({ step: 'tool_call', message: '' }))
-                .toBe('[progress] Running tool: unknown');
+                .toBe('[progress] Analyzing code');
         });
 
         it('formats generating_review step', () => {

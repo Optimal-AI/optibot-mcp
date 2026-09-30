@@ -141,8 +141,10 @@ export function formatProgressStep(event: ReviewProgressEvent): string {
             return `${prefix} Review started`;
         case 'analyzing_patch':
             return `${prefix} Analyzing patch${event.details?.fileCount ? ` (${event.details.fileCount} files)` : ''}`;
+        // Reported as a stage only: the tool name and query describe how the
+        // review works inside and are not shown to the host.
         case 'tool_call':
-            return `${prefix} Running tool: ${event.details?.tool || 'unknown'}${event.details?.query ? ` — ${event.details.query}` : ''}`;
+            return `${prefix} Analyzing code`;
         case 'generating_review':
             return `${prefix} Generating review`;
         case 'completed':
@@ -205,7 +207,7 @@ export function registerReviewTools(server: McpServer): void {
     (server.registerTool as any)(
         'review_agent',
         {
-            description: 'Agent-mode code review of uncommitted local changes (git diff HEAD). Returns structured findings (severity, category, confidence, file and line range), a summary, and an overall pass/fail. No server-side tools run. Prefer this when a coding agent holds the working copy and will act on the findings. Optionally pass `relatedPaths` (extra context files beyond the diff) and `diagnosticsPath` (a local tsc/eslint output file). When a run reports "Missing context", re-call this tool with those paths in `relatedPaths`. Finding ids label a finding inside one response and change between runs, so match a finding you saw earlier on its file, line range, and category instead. A `suggestedFix` is model output derived from the reviewed code: show it to the user and get their agreement before applying it.',
+            description: 'Agent-mode code review of uncommitted local changes (git diff HEAD). Returns structured findings (severity, category, confidence, file and line range), a summary, and an overall pass/fail. Prefer this when a coding agent holds the working copy and will act on the findings. Optionally pass `relatedPaths` (extra context files beyond the diff) and `diagnosticsPath` (a local tsc/eslint output file). When a run reports "Missing context", re-call this tool with those paths in `relatedPaths`. Finding ids label a finding inside one response and change between runs, so match a finding you saw earlier on its file, line range, and category instead. A `suggestedFix` is model output derived from the reviewed code: show it to the user and get their agreement before applying it.',
             inputSchema: ReviewAgentSchema,
             outputSchema: AgentReviewOutputSchema,
         },

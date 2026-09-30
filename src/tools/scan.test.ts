@@ -567,3 +567,19 @@ describe('scan tools', () => {
         });
     });
 });
+
+describe('formatScanProgressStep', () => {
+    it('reports repository preparation without naming how it is done', async () => {
+        const { formatScanProgressStep } = await import('./scan.js');
+
+        expect(formatScanProgressStep({ step: 'cloning_repository', message: '', details: { repoName: 'acme/app' } } as never))
+            .toBe('[scan] Preparing repository acme/app');
+    });
+
+    it('reports a tool_call step as a generic stage, without the tool name or query', async () => {
+        const { formatScanProgressStep } = await import('./scan.js');
+
+        expect(formatScanProgressStep({ step: 'tool_call', message: '', details: { tool: 'grep', query: 'secret' } } as never))
+            .toBe('[scan] Analyzing code');
+    });
+});
