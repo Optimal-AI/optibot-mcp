@@ -134,10 +134,8 @@ export function formatScanProgressStep(event: SecurityScanProgressEvent): string
             return `${prefix} Preparing repository${d?.repoName ? ` ${sanitizeServerText(d.repoName)}` : ''}`;
         case 'scanning_code':
             return `${prefix} Scanning code`;
-        // Reported as a stage only: the tool name and query describe how the
-        // scan works inside and are not shown to the host.
         case 'tool_call':
-            return `${prefix} Analyzing code`;
+            return `${prefix} Tool: ${sanitizeServerText(d?.tool || 'unknown')}${d?.query ? ` — ${sanitizeServerText(d.query)}` : ''}`;
         case 'budget_update': {
             const tokens = typeof d?.tokensUsed === 'number' ? d.tokensUsed.toLocaleString() : '?';
             const cost = typeof d?.costUSD === 'number' ? `$${d.costUSD.toFixed(4)}` : '?';

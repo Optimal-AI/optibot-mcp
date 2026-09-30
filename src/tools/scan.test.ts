@@ -576,10 +576,10 @@ describe('formatScanProgressStep', () => {
             .toBe('[scan] Preparing repository acme/app');
     });
 
-    it('reports a tool_call step as a generic stage, without the tool name or query', async () => {
+    it('shows the tool name and query of a tool_call step, with control characters stripped', async () => {
         const { formatScanProgressStep } = await import('./scan.js');
 
-        expect(formatScanProgressStep({ step: 'tool_call', message: '', details: { tool: 'grep', query: 'secret' } } as never))
-            .toBe('[scan] Analyzing code');
+        expect(formatScanProgressStep({ step: 'tool_call', message: '', details: { tool: 'grep', query: 'sec\u001b[2Jret' } } as never))
+            .toBe('[scan] Tool: grep \u2014 secret');
     });
 });

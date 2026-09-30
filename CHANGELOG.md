@@ -17,7 +17,8 @@
 ### Fixed
 
 - `get_security_scan` on an unknown scan id suggests `list_security_scans`.
-- Tool descriptions and progress notifications describe what each tool does rather than how the service works.
+- Tool descriptions describe what each tool does rather than how the service works.
+- Review progress notifications strip control characters from the tool name and file path or search pattern they show.
 
 ### Documentation
 

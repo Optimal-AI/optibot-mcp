@@ -741,14 +741,24 @@ describe('review tools', () => {
                 .toBe('[progress] Analyzing patch (5 files)');
         });
 
-        it('reports a tool_call step as a generic stage, without the tool name or query', () => {
-            expect(formatProgressStep({ step: 'tool_call', message: '', details: { tool: 'search', query: 'password' } }))
-                .toBe('[progress] Analyzing code');
+        it('formats tool_call step with tool name', () => {
+            expect(formatProgressStep({ step: 'tool_call', message: '', details: { tool: 'lint' } }))
+                .toBe('[progress] Running tool: lint');
         });
 
-        it('reports a tool_call step without details the same way', () => {
+        it('formats tool_call step with tool and query', () => {
+            expect(formatProgressStep({ step: 'tool_call', message: '', details: { tool: 'search', query: 'foo' } }))
+                .toBe('[progress] Running tool: search \u2014 foo');
+        });
+
+        it('formats tool_call step without details', () => {
             expect(formatProgressStep({ step: 'tool_call', message: '' }))
-                .toBe('[progress] Analyzing code');
+                .toBe('[progress] Running tool: unknown');
+        });
+
+        it('strips control characters from the tool name and query, which come from the reviewed repository', () => {
+            expect(formatProgressStep({ step: 'tool_call', message: '', details: { tool: 'read\u001b[2Jfile', query: 'src/a\u001b[31m.ts' } }))
+                .toBe('[progress] Running tool: readfile \u2014 src/a.ts');
         });
 
         it('formats generating_review step', () => {

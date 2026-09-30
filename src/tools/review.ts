@@ -141,10 +141,10 @@ export function formatProgressStep(event: ReviewProgressEvent): string {
             return `${prefix} Review started`;
         case 'analyzing_patch':
             return `${prefix} Analyzing patch${event.details?.fileCount ? ` (${event.details.fileCount} files)` : ''}`;
-        // Reported as a stage only: the tool name and query describe how the
-        // review works inside and are not shown to the host.
+        // The tool name and its argument (a file path or search pattern) come
+        // from the reviewed repository, so both are sanitized before display.
         case 'tool_call':
-            return `${prefix} Analyzing code`;
+            return `${prefix} Running tool: ${sanitizeServerText(event.details?.tool || 'unknown')}${event.details?.query ? ` — ${sanitizeServerText(event.details.query)}` : ''}`;
         case 'generating_review':
             return `${prefix} Generating review`;
         case 'completed':
