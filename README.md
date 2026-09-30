@@ -145,9 +145,9 @@ Once configured, just ask your AI assistant naturally:
 
 #### Agent review mode (`review_agent`)
 
-`review_agent` is built for a coding-agent host that already holds the working copy and will act on the results. Unlike the prose-style `review_local_changes`, it returns **structured findings**, with no server-side tools — the changed files are front-loaded with the diff so the reviewer has everything it needs. The review is submitted and then polled for, so no single HTTP request has to stay open for the whole review; a backend without the async path answers inline and the tool handles that without any configuration.
+`review_agent` is built for a coding-agent host that already holds the working copy and will act on the results. Unlike the prose-style `review_local_changes`, it returns **structured findings**, usually within seconds. The changed files are sent with the diff so the reviewer has the context it needs.
 
-Each finding carries an `id`, `severity` (`blocker` / `warning` / `nit`), `category`, `file:line`, `message`, an optional `suggestedFix`, and a `confidence` score (1-10). The `id` labels a finding inside one response. It is **not** stable between runs: the service hashes the reviewer's message into it, and the reviewer rephrases itself on every call. To tell whether a finding from an earlier round is still there, compare the file, the line range, and the category.
+Each finding carries an `id`, `severity` (`blocker` / `warning` / `nit`), `category`, `file:line`, `message`, an optional `suggestedFix`, and a `confidence` score (1-10). The `id` labels a finding inside one response. It is **not** stable between runs. To tell whether a finding from an earlier round is still there, compare the file, the line range, and the category.
 
 The tool answers on two channels at once. The text result opens with a structural severity breakdown for an at-a-glance read, then lists every finding — that is what a host renders for a person. Alongside it, the same review comes back as **structured content**: the tool declares an output schema mirroring the response, so a host reads `status`, `reviewPass`, and the `findings` array as data instead of parsing headings out of markdown. Read whichever suits your host; they describe the same review.
 
@@ -163,7 +163,7 @@ When a review cannot finish, the tool names which of two things happened: the di
 
 | Input | Type | Purpose |
 |-------|------|---------|
-| `relatedPaths` | `string[]` | Repo-relative paths of extra files the reviewer should read — callers, interfaces, or tests that the changed code depends on but that are not themselves changed. The tool reads each from disk and sends it as related context. Files that cannot be read (missing, outside the repo, potentially sensitive, or binary) are skipped, and a `Context warnings:` block is prepended to the output naming each one. |
+| `relatedPaths` | `string[]` | Repo-relative paths of extra files the reviewer should read — callers, interfaces, or tests that the changed code depends on but that are not themselves changed. The tool reads each from disk and sends it as related context. Files that cannot or should not be sent (missing, outside the repository, credential files, files your repository ignores, files that contain secrets, or binary files) are skipped, and a `Context warnings:` block is prepended to the output naming each one. |
 | `diagnosticsPath` | `string` | Repo-relative path to a local `tsc`/`eslint`/LSP output file. The tool reads it as plain text and passes it to the reviewer as local diagnostics. If it cannot be read, the tool warns and continues rather than failing. |
 
 Both are optional; with neither, the tool behaves exactly as before.
@@ -192,7 +192,7 @@ The host (which has an LLM) drives that resubmit — it reads the listed files a
 | Tool | Description |
 |------|-------------|
 | `list_organizations` | List all organizations you belong to |
-| `get_current_organization` | Show the active organization (read from the JWT claim) |
+| `get_current_organization` | Show the active organization |
 | `switch_organization` | Rescope your token to a different org (by id or name) |
 
 ### CI/CD setup
@@ -228,25 +228,7 @@ The host (which has an LLM) drives that resubmit — it reads the listed files a
 
 During reviews and security scans, the MCP server emits real-time progress notifications using MCP logging messages. Your MCP client will receive updates as the operation progresses.
 
-`review_agent` is the exception to the shape below: it has no progress socket, because the service runs no tools for it. It reports while it waits for the result instead, so a host can see the call is alive rather than reading a silent minute as a hung tool.
-
-**Reviews** (`review_local_changes`, `review_branch`, `review_diff_file` — over a WebSocket connection to the Optibot backend):
-
-1. **started** — Review request accepted
-2. **analyzing_patch** — Parsing and analyzing the diff
-3. **tool_call** — Running analysis tools (with tool name and query details)
-4. **generating_review** — Generating the final review
-5. **completed** — Review finished
-
-**Security scans:**
-
-1. **started** — Scan request accepted
-2. **cloning_repository** — Fetching the repository
-3. **scanning_code** — Running security analysis
-4. **tool_call** — Individual analyzer tool invocations
-5. **budget_update** — Running token + cost ticker
-6. **generating_report** — Producing the final markdown report
-7. **completed** / **failed** — Final status
+Reviews report each stage from start to completion, and security scans also report a running token and cost counter. `review_agent` sends a notification while it waits for the result, so a host can see the call is alive.
 
 ## CI/CD Integration
 
