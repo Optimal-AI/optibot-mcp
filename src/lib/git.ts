@@ -3,6 +3,7 @@ import { promisify } from 'util';
 import * as path from 'path';
 import * as fs from 'fs/promises';
 import { GitChangedFile } from '../types.js';
+import { findSecretInContent } from './contextSafety.js';
 
 const execFile = promisify(execFileCb);
 
@@ -27,11 +28,46 @@ const SENSITIVE_FILENAME_PATTERNS: RegExp[] = [
     /\.pypirc$/i,              // PyPI credentials
     /\.netrc$/i,               // Generic credentials
     /authinfo(\.gpg)?$/i,      // Emacs auth info
+    /^\.envrc$/i,              // direnv environment files
+    /\.tfvars(\.json)?$/i,     // Terraform variable files
 ];
 
 export function isSensitiveFile(relativePath: string): boolean {
-    const basename = path.basename(relativePath);
-    return SENSITIVE_FILENAME_PATTERNS.some(pattern => pattern.test(basename));
+    // Match the name Windows actually opens: it ignores an NTFS stream suffix
+    // (".env::$DATA") and trailing dots and spaces (".env ", ".env.").
+    // A colon is an ordinary character on macOS and Linux, so the full name
+    // is checked too: "prod:db.pem" is sensitive there, not "prod".
+    const name = path.basename(relativePath);
+    const candidates = [name, name.split(':', 1)[0]].map(n => n.replace(/[. ]+$/u, ''));
+    return candidates.some(basename => SENSITIVE_FILENAME_PATTERNS.some(pattern => pattern.test(basename)));
+}
+
+/**
+ * Whether git ignores any of `paths` in the repository at `repoRoot`. A path may
+ * be relative to the repository (as requested) or absolute (as resolved).
+ * Local configuration and secrets are normally ignored, and a reviewer never
+ * needs one to judge a change. 'unknown' means git could not answer; callers
+ * treat it as a refusal.
+ */
+export async function gitIgnoreStatus(
+    repoRoot: string,
+    paths: string[],
+): Promise<'ignored' | 'not-ignored' | 'unknown'> {
+    let realRepoRoot: string;
+    try {
+        realRepoRoot = await fs.realpath(repoRoot);
+    } catch {
+        realRepoRoot = path.resolve(repoRoot);
+    }
+    const relative = paths.map(p => (path.isAbsolute(p) ? path.relative(realRepoRoot, p) : p));
+    try {
+        // No -q: git accepts it with a single path only. `--` so a path that
+        // starts with "-" is never read as an option.
+        await execFile('git', ['check-ignore', '--', ...relative], { cwd: realRepoRoot });
+        return 'ignored'; // exit 0: at least one path is ignored
+    } catch (err: unknown) {
+        return (err as { code?: unknown })?.code === 1 ? 'not-ignored' : 'unknown';
+    }
 }
 
 /**
@@ -424,6 +460,16 @@ export async function getRelatedFileContents(
         }
         const absolutePath = screened.absolutePath;
 
+        // Both the requested path and the file it resolves to, so a symlink
+        // cannot move an ignored file past the check. A git failure refuses.
+        const ignore = await gitIgnoreStatus(repoRoot, [relativePath, absolutePath]);
+        if (ignore !== 'not-ignored') {
+            warnings.push(ignore === 'ignored'
+                ? `Skipped related file ignored by git: ${relativePath}`
+                : `Skipped related file (git could not check whether it is ignored): ${relativePath}`);
+            continue;
+        }
+
         // Size first, from the directory entry: a file that cannot fit the
         // budget should never be pulled into memory just to be discarded.
         // Buffer.byteLength on the decoded text is still the figure that is
@@ -451,6 +497,12 @@ export async function getRelatedFileContents(
         // disk, run against the text already decoded here.
         if (looksBinary(content)) {
             warnings.push(`Skipped binary related file: ${relativePath}`);
+            continue;
+        }
+
+        const secretKind = findSecretInContent(content);
+        if (secretKind) {
+            warnings.push(`Skipped related file that contains what looks like a ${secretKind}: ${relativePath}`);
             continue;
         }
 

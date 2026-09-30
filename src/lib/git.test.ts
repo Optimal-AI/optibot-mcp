@@ -29,6 +29,8 @@ import {
     createUploadBudget,
     screenReadablePath,
     looksBinary,
+    isSensitiveFile,
+    gitIgnoreStatus,
 } from './git.js';
 
 const execMock = vi.mocked(exec);
@@ -476,6 +478,22 @@ describe('getFileContents', () => {
     });
 });
 
+function mockCheckIgnoreExit(code: number) {
+    execFileMock.mockImplementation(((
+        _file: string,
+        _args: unknown,
+        opts: unknown,
+        cb?: (err: (Error & { code?: number }) | null, result?: { stdout: string; stderr: string }) => void,
+    ) => {
+        const callback = typeof opts === 'function' ? opts : cb;
+        if (code === 0) {
+            callback!(null, { stdout: '', stderr: '' });
+            return;
+        }
+        callback!(Object.assign(new Error(`exit ${code}`), { code }));
+    }) as never);
+}
+
 describe('getRelatedFileContents', () => {
     beforeEach(() => {
         vi.mocked(fs.readFile).mockReset();
@@ -486,6 +504,40 @@ describe('getRelatedFileContents', () => {
         // realpath. Default to a lexical resolution so the tests behave like
         // paths with no symlinks; the symlink test overrides this.
         vi.mocked(fs.realpath).mockImplementation((async (p: unknown) => path.resolve(String(p))) as never);
+        // git check-ignore answers "nothing ignored" (exit 1) unless a test says otherwise.
+        mockCheckIgnoreExit(1);
+    });
+
+    it('skips a related file git ignores, checking the requested and the resolved path', async () => {
+        mockCheckIgnoreExit(0);
+
+        const { contents, warnings } = await getRelatedFileContents(['config/local.yml'], '/repo');
+
+        expect(contents).toEqual({});
+        expect(warnings.join(' ')).toContain('ignored by git');
+        expect(fs.readFile).not.toHaveBeenCalled();
+        const [file, args] = execFileMock.mock.calls[0] as unknown as [string, string[]];
+        expect(file).toBe('git');
+        expect(args).toEqual(['check-ignore', '--', 'config/local.yml', path.join('config', 'local.yml')]);
+    });
+
+    it('skips a related file when git cannot say whether it is ignored', async () => {
+        mockCheckIgnoreExit(128);
+
+        const { contents, warnings } = await getRelatedFileContents(['src/a.ts'], '/repo');
+
+        expect(contents).toEqual({});
+        expect(warnings.join(' ')).toContain('could not check');
+        expect(fs.readFile).not.toHaveBeenCalled();
+    });
+
+    it('skips a related file whose content holds a secret', async () => {
+        vi.mocked(fs.readFile).mockResolvedValue('-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaA\n' as never);
+
+        const { contents, warnings } = await getRelatedFileContents(['deploy/notes.txt'], '/repo');
+
+        expect(contents).toEqual({});
+        expect(warnings.join(' ')).toContain('private key');
     });
 
     it('reads each related path and keys contents by repo-relative path', async () => {
@@ -869,7 +921,7 @@ describe('createUploadBudget', () => {
         vi.mocked(fs.stat).mockResolvedValue({ size: 10 } as never);
         vi.mocked(fs.readFile).mockResolvedValue('0123456789');
 
-        mockExecFile('');
+        mockCheckIgnoreExit(1);
         const first = await getRelatedFileContents(['a.ts'], '/repo', budget);
         const second = await getRelatedFileContents(['b.ts'], '/repo', budget);
 
@@ -967,6 +1019,7 @@ describe('looksBinary — one rule for every reader', () => {
 
 describe('the readers share the binary rule', () => {
     beforeEach(() => {
+        mockCheckIgnoreExit(1);
         vi.mocked(fs.realpath).mockImplementation((async (p: unknown) => path.resolve(String(p))) as never);
         vi.mocked(fs.stat).mockResolvedValue({ size: 200 } as never);
         // Dense control bytes, no NUL — passed the old NUL-only check.
@@ -983,5 +1036,42 @@ describe('the readers share the binary rule', () => {
 
     it('readDiagnosticsFile refuses it', async () => {
         await expect(readDiagnosticsFile('tsc.log', '/repo')).rejects.toThrow('looks binary');
+    });
+});
+
+describe('isSensitiveFile additions', () => {
+    it.each(['.envrc', 'infra/prod.tfvars', 'infra/terraform.tfvars.json', '.git-credentials', '.env.', '.env ', '.env::$DATA', 'prod:db.pem', 'deploy:id_rsa', 'certs/aws:creds.p12'])(
+        'treats %s as sensitive',
+        (name) => {
+            expect(isSensitiveFile(name)).toBe(true);
+        },
+    );
+
+    it.each(['src/environment.ts', 'docs/tfvars-guide.md', 'src/keyboard.ts', 'notes:draft.md'])('does not treat %s as sensitive', (name) => {
+        expect(isSensitiveFile(name)).toBe(false);
+    });
+});
+
+describe('gitIgnoreStatus', () => {
+    beforeEach(() => {
+        vi.mocked(fs.realpath).mockImplementation((async (p: unknown) => path.resolve(String(p))) as never);
+    });
+
+    it('is "ignored" when git check-ignore exits 0', async () => {
+        mockCheckIgnoreExit(0);
+
+        await expect(gitIgnoreStatus('/repo', ['.env'])).resolves.toBe('ignored');
+    });
+
+    it('is "not-ignored" only when git check-ignore exits 1', async () => {
+        mockCheckIgnoreExit(1);
+
+        await expect(gitIgnoreStatus('/repo', ['src/a.ts'])).resolves.toBe('not-ignored');
+    });
+
+    it('is "unknown" when git cannot answer', async () => {
+        mockCheckIgnoreExit(128);
+
+        await expect(gitIgnoreStatus('/tmp/x', ['a.ts'])).resolves.toBe('unknown');
     });
 });
