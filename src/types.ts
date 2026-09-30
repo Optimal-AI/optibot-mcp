@@ -333,3 +333,9 @@ export interface SecurityScanProgressEvent {
     message: string;
     details?: SecurityScanProgressDetails;
 }
+
+/** Per-call options for mapScanError (src/lib/scanErrors.ts). */
+export interface ScanErrorOptions {
+    /** Replaces the default 404 hint, which points at `list_scannable_repos`. */
+    readonly notFoundHint?: string;
+}

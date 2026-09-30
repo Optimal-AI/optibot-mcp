@@ -401,7 +401,7 @@ export function registerScanTools(server: McpServer): void {
                     return errorResult(mapScanError(Object.assign(new Error('Not found'), {
                         status: 404,
                         data: { error: `Scan ${input.scanId} not found in the ${maxPages * pageSize} most recent scans.` },
-                    })));
+                    }), { notFoundHint: 'Call `list_security_scans` to see recent scans and their ids.' }));
                 }
 
                 const summary = summarizeScanResult(match);

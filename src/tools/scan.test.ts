@@ -221,6 +221,17 @@ describe('scan tools', () => {
             expect(result.isError).toBe(true);
             expect(result.content[0].text).toContain('not found');
         });
+
+        it('points an unknown scan id at list_security_scans, not at the repository list', async () => {
+            mockListSecurityIssues.mockResolvedValue({
+                items: [], totalItems: 0, page: 1, pageSize: 50, totalPages: 0,
+            });
+
+            const result = await registered.get('get_security_scan')!({ scanId: 999 }, {});
+
+            expect(result.content[0].text).toContain('list_security_scans');
+            expect(result.content[0].text).not.toContain('list_scannable_repos');
+        });
     });
 
     describe('trigger_security_scan', () => {

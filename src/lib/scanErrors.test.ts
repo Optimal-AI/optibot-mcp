@@ -41,6 +41,16 @@ describe('mapScanError', () => {
         expect(info.hint).toContain('switch_organization');
     });
 
+    it('uses the caller\'s not-found hint instead of the repository hint when one is given', () => {
+        const info = mapScanError(apiError(404, { error: 'Scan 9 not found' }), {
+            notFoundHint: 'Call `list_security_scans` to see recent scans and their ids.',
+        });
+
+        expect(info.data.kind).toBe('not_found');
+        expect(info.hint).toContain('list_security_scans');
+        expect(info.hint).not.toContain('list_scannable_repos');
+    });
+
     it('maps 404 to not_found with a list_scannable_repos hint', () => {
         const info = mapScanError(apiError(404, { error: 'Repository 99 not found' }));
         expect(info.data.kind).toBe('not_found');

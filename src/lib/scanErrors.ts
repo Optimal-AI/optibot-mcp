@@ -6,6 +6,7 @@
  */
 
 import { sanitizeServerText } from './output.js';
+import type { ScanErrorOptions } from '../types.js';
 
 export interface ScanErrorInfo {
     /** One-line human-readable summary, safe to render directly. */
@@ -45,7 +46,7 @@ function fmtUsd(n: unknown): string {
     return `$${n.toFixed(2)}`;
 }
 
-export function mapScanError(err: unknown): ScanErrorInfo {
+export function mapScanError(err: unknown, options: ScanErrorOptions = {}): ScanErrorInfo {
     const e = err as RawApiError;
     const status = typeof e?.status === 'number' ? e.status : null;
     const data = e?.data ?? {};
@@ -108,7 +109,7 @@ export function mapScanError(err: unknown): ScanErrorInfo {
     if (status === 404) {
         return {
             humanMessage: `Not found: ${apiMessage}`,
-            hint: 'Call `list_scannable_repos` to list available repositories.',
+            hint: options.notFoundHint ?? 'Call `list_scannable_repos` to list available repositories.',
             data: { error: apiMessage, status, kind: 'not_found', details: detailsBlock },
         };
     }
