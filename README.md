@@ -219,7 +219,7 @@ The host (which has an LLM) drives that resubmit — it reads the listed files a
 | `list_security_scans` | Paginated list of recent scans (optionally filtered by repo) |
 | `get_security_scan` | Full markdown report + metadata for a specific scan id |
 | `get_security_usage` | Current-month token usage and cost |
-| `get_security_pricing` | Per-tier pricing and markup multiplier |
+| `get_security_pricing` | Per-tier scan pricing |
 | `list_scannable_repos` | Repositories available to scan in the active org |
 | `get_security_config` | Scheduled-scan configuration |
 | `update_security_config` | Update the scheduled-scan configuration (partial merge) |

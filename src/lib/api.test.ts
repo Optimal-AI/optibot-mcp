@@ -578,7 +578,7 @@ describe('ApiClient', () => {
 
     describe('getSecurityPricing', () => {
         it('GETs /api/security/pricing', async () => {
-            mockOkResponse({ markupMultiplier: 1, tiers: {} });
+            mockOkResponse({ tiers: {} });
             await client.getSecurityPricing();
             expect(fetchMock).toHaveBeenCalledWith(
                 'http://test-api.local/api/security/pricing',
