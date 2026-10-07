@@ -87,7 +87,54 @@ export async function getRepoRoot(): Promise<string> {
     }
 }
 
+/**
+ * Repository name from a git remote URL: its last path segment, without `.git`.
+ * Handles https, ssh, scp-style (`git@host:owner/repo.git`) and local paths.
+ */
+export function parseRepoNameFromRemoteUrl(url: string): string | null {
+    const trimmed = url.trim().replace(/\/+$/, '').replace(/\.git$/i, '');
+    const name = trimmed.split(/[/:\\]/).pop();
+    return name ? name : null;
+}
+
+async function getRemoteRepoName(): Promise<string | null> {
+    try {
+        const { stdout } = await execFile('git', ['remote', 'get-url', 'origin']);
+        return parseRepoNameFromRemoteUrl(stdout);
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * Folder name of the main checkout. Inside a linked worktree, --show-toplevel is
+ * the worktree's own folder; the common git dir still lives in the main checkout.
+ */
+async function getMainCheckoutName(): Promise<string | null> {
+    try {
+        const { stdout } = await execFile('git', ['rev-parse', '--path-format=absolute', '--git-common-dir']);
+        const commonDir = stdout.trim();
+        if (!commonDir) return null;
+        const base = path.basename(commonDir);
+        // Normal clone: <checkout>/.git. Bare repository: <name>.git.
+        return base === '.git' ? path.basename(path.dirname(commonDir)) : base.replace(/\.git$/i, '') || null;
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * The repository's name as the server knows it (GitHub's `repository.name`).
+ *
+ * Prefers the `origin` remote, so worktrees and checkouts in renamed folders
+ * (`repo`, `my-repo__1234`) still report the real repository. Falls back to the
+ * main checkout's folder, then to the current checkout's folder.
+ */
 export async function getRepoName(): Promise<string> {
+    const fromRemote = await getRemoteRepoName();
+    if (fromRemote) return fromRemote;
+    const fromMainCheckout = await getMainCheckoutName();
+    if (fromMainCheckout) return fromMainCheckout;
     const root = await getRepoRoot();
     return path.basename(root);
 }
