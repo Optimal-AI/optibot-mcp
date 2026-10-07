@@ -14,6 +14,7 @@ import * as fs from 'fs/promises';
 import {
     getRepoRoot,
     getRepoName,
+    parseRepoNameFromRemoteUrl,
     getDiffHead,
     getDiffBranch,
     readDiffFile,
@@ -184,11 +185,72 @@ describe('getRepoRoot', () => {
     });
 });
 
+describe('parseRepoNameFromRemoteUrl', () => {
+    it.each([
+        ['git@github.com:Optimal-AI/optibot-be.git', 'optibot-be'],
+        ['https://github.com/Optimal-AI/optibot-be.git', 'optibot-be'],
+        ['https://github.com/Optimal-AI/optibot-be', 'optibot-be'],
+        ['https://github.com/Optimal-AI/optibot-be/\n', 'optibot-be'],
+        ['ssh://git@gitlab.example.com:2222/group/sub/project.git', 'project'],
+        ['/srv/mirrors/optibot-be.git', 'optibot-be'],
+    ])('%s -> %s', (url, expected) => {
+        expect(parseRepoNameFromRemoteUrl(url)).toBe(expected);
+    });
+
+    it('returns null for an empty url', () => {
+        expect(parseRepoNameFromRemoteUrl('  \n')).toBeNull();
+    });
+});
+
 describe('getRepoName', () => {
-    it('returns basename of the repo root', async () => {
-        mockExecFile('/Users/me/my-project\n');
-        const name = await getRepoName();
-        expect(name).toBe('my-project');
+    /** Answer each git invocation by its arguments; an Error value makes it fail. */
+    function mockGit(answers: { remote?: string | Error; commonDir?: string | Error; toplevel?: string }) {
+        const respond = (args: string[], cb: (err: Error | null, result?: { stdout: string; stderr: string }) => void) => {
+            const joined = args.join(' ');
+            const answer = joined.startsWith('remote get-url') ? answers.remote
+                : joined.includes('--git-common-dir') ? answers.commonDir
+                : joined.includes('--show-toplevel') ? answers.toplevel
+                : undefined;
+            if (answer === undefined || answer instanceof Error) cb(answer ?? new Error(`unexpected git ${joined}`));
+            else cb(null, { stdout: answer, stderr: '' });
+        };
+        execFileMock.mockImplementation(((_file: string, args: string[], opts: any, cb?: any) =>
+            respond(args, typeof opts === 'function' ? opts : cb)) as any);
+        execMock.mockImplementation(((cmd: string, opts: any, cb?: any) =>
+            respond(cmd.replace(/^git /, '').split(' '), typeof opts === 'function' ? opts : cb)) as any);
+    }
+
+    it('uses the origin remote, not the worktree folder', async () => {
+        mockGit({
+            remote: 'git@github.com:Optimal-AI/optibot-be.git\n',
+            commonDir: '/Users/me/optibot-be/.git\n',
+            toplevel: '/Users/me/optibot-be/.claude/worktrees/modest-mahavira-5a035b\n',
+        });
+        expect(await getRepoName()).toBe('optibot-be');
+    });
+
+    it('uses the origin remote for a checkout in a renamed folder', async () => {
+        mockGit({ remote: 'https://github.com/Optimal-AI/optibot-be.git\n', toplevel: '/tmp/optibot-be__2379\n' });
+        expect(await getRepoName()).toBe('optibot-be');
+    });
+
+    it('falls back to the main checkout folder when there is no origin remote', async () => {
+        mockGit({
+            remote: new Error("No such remote 'origin'"),
+            commonDir: '/Users/me/my-project/.git\n',
+            toplevel: '/Users/me/my-project/.claude/worktrees/some-worktree\n',
+        });
+        expect(await getRepoName()).toBe('my-project');
+    });
+
+    it('strips .git from a bare repository common dir', async () => {
+        mockGit({ remote: new Error('no remote'), commonDir: '/srv/my-project.git\n' });
+        expect(await getRepoName()).toBe('my-project');
+    });
+
+    it('falls back to the repo root folder when git cannot report the common dir', async () => {
+        mockGit({ remote: new Error('no remote'), commonDir: new Error('unknown option'), toplevel: '/Users/me/my-project\n' });
+        expect(await getRepoName()).toBe('my-project');
     });
 });
 
