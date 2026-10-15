@@ -3,7 +3,8 @@
  * agent review (the `relatedPaths` input, usually filled from a review's
  * missing-context list). File names are screened in git.ts; this looks inside
  * the file, so a credential in an ordinarily named file is not sent either.
- * Mirrors the check in optibot-cli.
+ * The files the context scout picks go through the same check in
+ * readScoutedFile. Mirrors the check in optibot-cli.
  */
 
 // High-precision patterns only: each matches the fixed prefix or header a

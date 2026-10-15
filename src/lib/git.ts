@@ -519,6 +519,87 @@ export async function getRelatedFileContents(
     return { contents, warnings };
 }
 
+/** Every tracked path in the repository, as `git ls-files -z` prints it. */
+export async function getTrackedFiles(repoRoot: string): Promise<string[]> {
+    const { stdout } = await execFile('git', ['ls-files', '-z'], {
+        cwd: repoRoot,
+        maxBuffer: 256 * 1024 * 1024,
+    });
+    return stdout.split('\0').filter((p) => p.length > 0);
+}
+
+export type ScoutedFileRead =
+    | { ok: true; content: string }
+    | { ok: false; warning: string };
+
+/**
+ * Reads one file the context scout named. The path comes from the server, so
+ * it passes every check the related-file reader applies (containment, a
+ * sensitive name, a binary file, the shared upload budget) plus two more: the
+ * file must not be ignored by git, and its content must not hold a credential.
+ */
+export async function readScoutedFile(
+    requestedPath: string,
+    repoRoot: string,
+    budget: UploadBudget,
+): Promise<ScoutedFileRead> {
+    const screened = await screenReadablePath(requestedPath, repoRoot);
+    if (!screened.ok) {
+        if (screened.reason === 'sensitive') {
+            console.error(`[security] Skipping potentially sensitive scouted file: ${requestedPath}`);
+            return { ok: false, warning: `Skipped potentially sensitive scouted file: ${requestedPath}` };
+        }
+        if (screened.reason === 'binary') {
+            return { ok: false, warning: `Skipped binary scouted file: ${requestedPath}` };
+        }
+        return { ok: false, warning: `Skipped scouted file: not a readable file inside the repository: ${requestedPath}` };
+    }
+    const absolutePath = screened.absolutePath;
+
+    // Both names, so an ignored link cannot pass under a tracked name.
+    const ignored = await gitIgnoreStatus(repoRoot, [requestedPath, absolutePath]);
+    if (ignored === 'ignored') {
+        return { ok: false, warning: `Skipped scouted file: it is ignored by git: ${requestedPath}` };
+    }
+    if (ignored === 'unknown') {
+        return { ok: false, warning: `Skipped scouted file: git could not check whether it is ignored: ${requestedPath}` };
+    }
+
+    // Size and binary content are checked before the read, so a large file or a
+    // binary under a text-looking name is never pulled into memory.
+    try {
+        const stat = await fs.stat(absolutePath);
+        if (!budget.canFit(stat.size)) {
+            return { ok: false, warning: `Skipped scouted file (upload budget exceeded): ${requestedPath}` };
+        }
+    } catch {
+        return { ok: false, warning: `Could not read scouted file: ${requestedPath}` };
+    }
+    if (await isBinaryFile(absolutePath)) {
+        return { ok: false, warning: `Skipped binary scouted file: ${requestedPath}` };
+    }
+
+    let content: string;
+    try {
+        content = await fs.readFile(absolutePath, 'utf-8');
+    } catch {
+        return { ok: false, warning: `Could not read scouted file: ${requestedPath}` };
+    }
+
+    const secretKind = findSecretInContent(content);
+    if (secretKind) {
+        console.error(`[security] Skipping a scouted file that holds what looks like a ${secretKind}: ${requestedPath}`);
+        return { ok: false, warning: `Skipped scouted file: it holds what looks like a ${secretKind}: ${requestedPath}` };
+    }
+
+    const size = Buffer.byteLength(content, 'utf-8');
+    if (!budget.canFit(size)) {
+        return { ok: false, warning: `Skipped scouted file (upload budget exceeded): ${requestedPath}` };
+    }
+    budget.spend(size);
+    return { ok: true, content };
+}
+
 /**
  * Reads a caller-supplied diagnostics file (local `tsc`/`eslint` output) whose
  * contents are sent to the reviewer.
