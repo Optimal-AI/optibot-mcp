@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- `review_agent` runs a context step before reviewing a change of 200 or more changed lines. The step asks Optibot which other files in the repository the review will need, reads them from the working copy, and sends them with the review, so the reviewer rarely reports missing context. The step and the review count as one review. The tool names the files before it reads them and reports what the step did in `meta.scout`. It reads only files git tracks, and it skips files git ignores, files inside `.git`, binary files, files with credential-like names, and files whose content looks like a key or token. Pass `scout: false` to turn the step off. A backend without the step reviews as before.
+
 ### Changed
 
 - `review_agent` output describes a review's `meta` as `mode` and `durationMs`, in both the rendered text and the declared output schema.
