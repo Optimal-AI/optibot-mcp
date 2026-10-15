@@ -25,6 +25,8 @@ const mockApiReviewAgent = vi.fn();
 const mockApiSubmitAgentReview = vi.fn();
 const mockApiGetAgentReviewResult = vi.fn();
 const mockStartSession = vi.fn();
+const mockRunScout = vi.fn();
+const SMALL_CHANGE_SCOUT = { files: [], meta: { durationMs: 0, files: [], skipped: true, reason: 'small_change' }, warnings: [] };
 const mockEndSession = vi.fn();
 
 vi.mock('../lib/config.js', () => ({
@@ -79,6 +81,10 @@ vi.mock('../lib/output.js', async (importOriginal) => {
         sanitizeAgentReviewResponse: actual.sanitizeAgentReviewResponse,
     };
 });
+
+vi.mock('../lib/scout.js', () => ({
+    runScout: (...args: any[]) => mockRunScout(...args),
+}));
 
 vi.mock('../lib/reviewProgress.js', () => ({
     ReviewProgressService: class {
@@ -136,6 +142,7 @@ describe('review tools', () => {
             review: await mockApiReviewAgent(params),
         }));
         mockApiGetAgentReviewResult.mockReset();
+        mockRunScout.mockReset().mockResolvedValue(SMALL_CHANGE_SCOUT);
     });
 
     describe('review_local_changes', () => {
@@ -218,6 +225,164 @@ describe('review tools', () => {
     });
 
     describe('review_agent', () => {
+        describe('context scout', () => {
+            const review = { status: 'looks_good', reviewPass: true, summary: 's', findings: [], meta: { mode: 'agent', durationMs: 1200 } };
+            const scouted = {
+                files: [{ path: 'src/c.ts', content: 'c' }, { path: 'src/d.ts', content: 'd' }],
+                reviewTicket: 'ticket-1',
+                meta: { durationMs: 900, files: ['src/c.ts', 'src/d.ts'], skipped: false },
+                warnings: [],
+            };
+
+            beforeEach(() => {
+                mockReadConfig.mockResolvedValue({ apiKey: 'key' });
+                mockGetRepoRoot.mockResolvedValue('/repo');
+                mockGetRepoName.mockResolvedValue('acme/app');
+                mockGetDiffHead.mockResolvedValue('diff content');
+                mockGetChangedFiles.mockResolvedValue([{ relativePath: 'a.ts', status: 'M' }]);
+                mockGetFileContents.mockResolvedValue({ 'a.ts': 'contents' });
+                mockGetRelatedFileContents.mockResolvedValue({ contents: { 'src/b.ts': 'b' }, warnings: [] });
+                mockFormatAgentReview.mockReturnValue('rendered');
+                mockApiSubmitAgentReview.mockReset().mockResolvedValue({ kind: 'completed', review });
+            });
+
+            it('scouts with the changed and related paths, then sends the scouted files and the ticket', async () => {
+                mockRunScout.mockResolvedValue(scouted);
+
+                const result: any = await registeredTools.get('review_agent')!({ relatedPaths: ['src/b.ts'] }, mockExtra);
+
+                expect(mockRunScout).toHaveBeenCalledWith(
+                    expect.anything(),
+                    { patch: 'diff content', repositoryName: 'acme/app', providedPaths: ['a.ts', 'src/b.ts'] },
+                    '/repo',
+                    expect.objectContaining({ canFit: expect.any(Function) }),
+                    mockExtra,
+                );
+                expect(mockApiSubmitAgentReview).toHaveBeenCalledWith(expect.objectContaining({
+                    scoutedFiles: scouted.files,
+                    reviewTicket: 'ticket-1',
+                }));
+                expect(result.structuredContent.meta).toEqual({
+                    mode: 'agent',
+                    durationMs: 1200,
+                    scout: { durationMs: 900, files: ['src/c.ts', 'src/d.ts'], skipped: false },
+                });
+                expect(result.content[0].text).toContain('Context step: sent 2 more file(s) with the review: src/c.ts, src/d.ts');
+            });
+
+            it('shares one upload budget between the changed files, the related files, and the scout', async () => {
+                await registeredTools.get('review_agent')!({ relatedPaths: ['src/b.ts'] }, mockExtra);
+
+                const budget = mockGetFileContents.mock.calls[0][2];
+                expect(mockGetRelatedFileContents.mock.calls[0][2]).toBe(budget);
+                expect(mockRunScout.mock.calls[0][3]).toBe(budget);
+            });
+
+            it('reports a skipped scout in meta and adds no markdown line', async () => {
+                const result: any = await registeredTools.get('review_agent')!({}, mockExtra);
+
+                expect(result.structuredContent.meta.scout).toEqual({ durationMs: 0, files: [], skipped: true, reason: 'small_change' });
+                expect(result.content[0].text).toBe('rendered');
+            });
+
+            it('adds meta.scout when the server sent no meta', async () => {
+                mockApiSubmitAgentReview.mockResolvedValue({ kind: 'completed', review: { ...review, meta: undefined } });
+                mockRunScout.mockResolvedValue(scouted);
+
+                const result: any = await registeredTools.get('review_agent')!({}, mockExtra);
+
+                expect(result.structuredContent.meta).toEqual({ scout: scouted.meta });
+            });
+
+            it('skips the scout when scout is false, and reports no scout meta', async () => {
+                const result: any = await registeredTools.get('review_agent')!({ scout: false }, mockExtra);
+
+                expect(mockRunScout).not.toHaveBeenCalled();
+                expect(mockApiSubmitAgentReview).toHaveBeenCalledWith(expect.objectContaining({ scoutedFiles: [], reviewTicket: undefined }));
+                expect(result.structuredContent.meta).toEqual({ mode: 'agent', durationMs: 1200 });
+            });
+
+            it('passes the scout warnings on, stripped of control characters', async () => {
+                mockRunScout.mockResolvedValue({ ...scouted, warnings: ['Skipped scouted file: it is ignored by git: \u001b[31mx.ts'] });
+
+                const result: any = await registeredTools.get('review_agent')!({}, mockExtra);
+
+                expect(result.structuredContent.warnings).toEqual(['Skipped scouted file: it is ignored by git: x.ts']);
+            });
+
+            it('strips control characters from the scouted paths it reports', async () => {
+                mockRunScout.mockResolvedValue({
+                    ...scouted,
+                    files: [{ path: 'src/\u0007c.ts', content: 'c' }],
+                    meta: { ...scouted.meta, files: ['src/\u0007c.ts'] },
+                });
+
+                const result: any = await registeredTools.get('review_agent')!({}, mockExtra);
+
+                expect(result.structuredContent.meta.scout.files).toEqual(['src/c.ts']);
+                expect(result.content[0].text).toContain('src/c.ts');
+                expect(result.content[0].text).not.toContain('\u0007');
+            });
+
+            it('retries once without the scouted files after a 413, keeping the ticket', async () => {
+                mockRunScout.mockResolvedValue(scouted);
+                mockApiSubmitAgentReview
+                    .mockRejectedValueOnce(Object.assign(new Error('Payload Too Large'), { status: 413, data: {} }))
+                    .mockResolvedValueOnce({ kind: 'completed', review });
+
+                const result: any = await registeredTools.get('review_agent')!({}, mockExtra);
+
+                expect(mockApiSubmitAgentReview).toHaveBeenCalledTimes(2);
+                expect(mockApiSubmitAgentReview.mock.calls[1][0]).toEqual(expect.objectContaining({ scoutedFiles: [], reviewTicket: 'ticket-1' }));
+                expect(result.isError).toBeUndefined();
+                expect(result.structuredContent.meta.scout.files).toEqual([]);
+                expect(result.structuredContent.warnings).toEqual([expect.stringContaining('too large')]);
+                expect(result.content[0].text).not.toContain('Context step: sent');
+            });
+
+            it('does not retry a 413 that reports the context window', async () => {
+                mockRunScout.mockResolvedValue(scouted);
+                mockApiSubmitAgentReview.mockRejectedValue(Object.assign(new Error('too long'), {
+                    status: 413,
+                    data: { error: 'The diff is too large for the context window.' },
+                }));
+                mockFormatError.mockReturnValue('error text');
+
+                const result: any = await registeredTools.get('review_agent')!({}, mockExtra);
+
+                expect(mockApiSubmitAgentReview).toHaveBeenCalledTimes(1);
+                expect(result.isError).toBe(true);
+            });
+
+            it('does not retry a 413 when no scouted files were attached', async () => {
+                mockApiSubmitAgentReview.mockRejectedValue(Object.assign(new Error('Payload Too Large'), { status: 413, data: {} }));
+                mockFormatError.mockReturnValue('error text');
+
+                const result: any = await registeredTools.get('review_agent')!({}, mockExtra);
+
+                expect(mockApiSubmitAgentReview).toHaveBeenCalledTimes(1);
+                expect(result.isError).toBe(true);
+            });
+
+            it('does not retry any other error', async () => {
+                mockRunScout.mockResolvedValue(scouted);
+                mockApiSubmitAgentReview.mockRejectedValue(Object.assign(new Error('limit'), { status: 429, data: {} }));
+                mockFormatError.mockReturnValue('error text');
+
+                const result: any = await registeredTools.get('review_agent')!({}, mockExtra);
+
+                expect(mockApiSubmitAgentReview).toHaveBeenCalledTimes(1);
+                expect(result.isError).toBe(true);
+            });
+
+            it('declares the scout input and the scout meta in its schemas', () => {
+                const config = registeredToolConfigs.get('review_agent');
+                expect(config.inputSchema.scout).toBeDefined();
+                expect(config.outputSchema.meta.unwrap().shape.scout).toBeDefined();
+                expect(config.description).toContain('scout: false');
+            });
+        });
+
         it('returns formatted agent review on success', async () => {
             mockReadConfig.mockResolvedValue({ apiKey: 'key' });
             mockGetRepoRoot.mockResolvedValue('/repo');

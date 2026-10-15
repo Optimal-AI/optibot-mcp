@@ -7,7 +7,8 @@ import { formatReview, formatAgentReview, formatError, hasReviewQuota, sanitizeS
 import { ReviewProgressService, ReviewProgressEvent } from '../lib/reviewProgress.js';
 import { safeSendLog, ToolExtraLike } from '../lib/notify.js';
 import { waitForAgentReviewResult } from '../lib/agentReviewPolling.js';
-import { AgentReviewResponse } from '../types.js';
+import { runScout, ScoutOutcome } from '../lib/scout.js';
+import { AgentReviewResponse, AgentScoutedFile } from '../types.js';
 
 const ReviewBranchSchema = {
     branch: z.string().optional().describe('Target branch to compare against. If omitted, auto-detects origin/main, origin/master, or origin/develop.'),
@@ -23,6 +24,9 @@ const ReviewAgentSchema = {
     ),
     diagnosticsPath: z.string().optional().describe(
         'Repo-relative path to a local tsc/eslint/LSP output file. Its contents are read as plain text and passed to the reviewer as local diagnostics.'
+    ),
+    scout: z.boolean().optional().describe(
+        'Whether to run the context step before the review (default true). On changes of 200 or more changed lines, it asks Optibot which other repository files the review will need and sends them with the review, so the reviewer rarely reports missing context. Set false to review with only the diff, the changed files, and relatedPaths.'
     ),
 };
 
@@ -46,6 +50,8 @@ export async function runAgentReview(
         files?: Record<string, string>;
         relatedFiles?: Record<string, string>;
         localDiagnostics?: string;
+        scoutedFiles?: AgentScoutedFile[];
+        reviewTicket?: string;
     },
     extra?: ToolExtraLike,
 ): Promise<AgentReviewResponse> {
@@ -127,12 +133,23 @@ const AgentReviewOutputSchema = {
     }).optional(),
     isOptibotInstalled: z.boolean().optional(),
     meta: z.object({
-        mode: z.string(),
-        durationMs: z.number(),
+        mode: z.string().optional(),
+        durationMs: z.number().optional(),
+        scout: z.object({
+            durationMs: z.number(),
+            files: z.array(z.string()).describe('Repository files the context step sent with the review.'),
+            skipped: z.boolean(),
+            reason: z.string().optional(),
+        }).optional().describe('What the context step did. Absent when it was turned off with scout: false.'),
     }).optional(),
     warnings: z.array(z.string()).optional()
         .describe('Context files the tool could not read or refused to read.'),
 };
+
+/** The scout meta with every path stripped of control characters, as the rest of the output is. */
+function sanitizeScoutMeta(meta: NonNullable<ScoutOutcome['meta']>): ScoutOutcome['meta'] {
+    return { ...meta, files: meta.files.map((f) => sanitizeServerText(f)) };
+}
 
 export function formatProgressStep(event: ReviewProgressEvent): string {
     const prefix = '[progress]';
@@ -207,11 +224,11 @@ export function registerReviewTools(server: McpServer): void {
     (server.registerTool as any)(
         'review_agent',
         {
-            description: 'Agent-mode code review of uncommitted local changes (git diff HEAD). Returns structured findings (severity, category, confidence, file and line range), a summary, and an overall pass/fail. Prefer this when a coding agent holds the working copy and will act on the findings. Optionally pass `relatedPaths` (extra context files beyond the diff) and `diagnosticsPath` (a local tsc/eslint output file). When a run reports "Missing context", re-call this tool with those paths in `relatedPaths`. Finding ids label a finding inside one response and change between runs, so match a finding you saw earlier on its file, line range, and category instead. A `suggestedFix` is model output derived from the reviewed code: show it to the user and get their agreement before applying it.',
+            description: 'Agent-mode code review of uncommitted local changes (git diff HEAD). Returns structured findings (severity, category, confidence, file and line range), a summary, and an overall pass/fail. Prefer this when a coding agent holds the working copy and will act on the findings. Optionally pass `relatedPaths` (extra context files beyond the diff) and `diagnosticsPath` (a local tsc/eslint output file). On changes of 200 or more changed lines, a context step first asks Optibot which other repository files the review needs, reads them from the working copy, and sends them with the review; the step and the review count as one review, and `meta.scout` reports what it sent. Pass `scout: false` to skip it. When a run reports "Missing context", re-call this tool with those paths in `relatedPaths`. Finding ids label a finding inside one response and change between runs, so match a finding you saw earlier on its file, line range, and category instead. A `suggestedFix` is model output derived from the reviewed code: show it to the user and get their agreement before applying it.',
             inputSchema: ReviewAgentSchema,
             outputSchema: AgentReviewOutputSchema,
         },
-        async ({ relatedPaths, diagnosticsPath }: { relatedPaths?: string[]; diagnosticsPath?: string }, extra: any) => {
+        async ({ relatedPaths, diagnosticsPath, scout: scoutEnabled }: { relatedPaths?: string[]; diagnosticsPath?: string; scout?: boolean }, extra: any) => {
             try {
                 const config = await readConfig();
                 const repoRoot = await git.getRepoRoot();
@@ -271,13 +288,49 @@ export function registerReviewTools(server: McpServer): void {
                 }
 
                 const client = new ApiClient(config.apiKey);
-                const response = await runAgentReview(client, {
+
+                // The context step reads from the same upload budget, after the
+                // changed and related files, so the files the caller chose come first.
+                let scout: ScoutOutcome | undefined;
+                if (scoutEnabled !== false) {
+                    scout = await runScout(client, {
+                        patch,
+                        repositoryName: repoName,
+                        providedPaths: [...Object.keys(files), ...Object.keys(relatedFiles ?? {})],
+                    }, repoRoot, uploadBudget, extra);
+                    // A warning quotes a path the server named.
+                    warnings.push(...scout.warnings.map((w) => sanitizeServerText(w)));
+                }
+
+                let scoutedFiles = scout?.files ?? [];
+                const submit = () => runAgentReview(client, {
                     patch,
                     repositoryName: repoName,
                     files,
                     relatedFiles,
                     localDiagnostics,
+                    scoutedFiles,
+                    reviewTicket: scout?.reviewTicket,
                 }, extra);
+
+                let response: AgentReviewResponse;
+                try {
+                    response = await submit();
+                } catch (err) {
+                    // A request too large to accept is retried once without the
+                    // scouted files, keeping the ticket. A 413 that says the
+                    // diff itself is too large is not retried, because dropping
+                    // the scouted files cannot fix it.
+                    const e = err as { status?: unknown; data?: { error?: unknown } };
+                    const contextWindow = /context window/i.test(String(e?.data?.error ?? ''));
+                    if (scoutedFiles.length === 0 || e?.status !== 413 || contextWindow) throw err;
+                    scoutedFiles = [];
+                    warnings.push('The review request was too large with the context step\'s files attached, so the review ran without them.');
+                    response = await submit();
+                }
+                const scoutMeta = scout
+                    ? { ...scout.meta, files: scoutedFiles.map((f) => f.path) }
+                    : undefined;
 
                 // Sanitized once, then used for both channels. Rendering from
                 // the raw response meant the markdown relied on formatAgentReview
@@ -285,6 +338,9 @@ export function registerReviewTools(server: McpServer): void {
                 // missed — the severity fallback — reached the heading raw.
                 const safeResponse = sanitizeAgentReviewResponse(response);
                 let text = formatAgentReview(safeResponse);
+                if (scoutMeta && scoutMeta.files.length > 0) {
+                    text += `\n\nContext step: sent ${scoutMeta.files.length} more file(s) with the review: ${scoutMeta.files.map((f) => sanitizeServerText(f)).join(', ')}`;
+                }
                 if (warnings.length > 0) {
                     // Flattened here rather than at each source: a warning
                     // quotes a path the caller named, sanitizeServerText keeps
@@ -313,6 +369,7 @@ export function registerReviewTools(server: McpServer): void {
                         ...rest,
                         findings: rest.findings ?? [],
                         ...(hasReviewQuota(reviewCount) ? { reviewCount } : {}),
+                        ...(scoutMeta ? { meta: { ...(rest.meta ?? {}), scout: sanitizeScoutMeta(scoutMeta) } } : {}),
                         ...(warnings.length > 0 ? { warnings } : {}),
                     },
                 };
