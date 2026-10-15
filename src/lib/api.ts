@@ -4,6 +4,8 @@ import {
     AgentReviewRequest,
     AgentReviewSubmission,
     AgentReviewResultResponse,
+    AgentContextRequest,
+    AgentContextResult,
     ApiKeyCreateResponse,
     ApiKeyListItem,
     ApiKeyListResponse,
@@ -24,6 +26,12 @@ import { getApiBaseUrl } from './apiConfig.js';
 import { CLIENT_HEADERS } from './clientHeaders.js';
 
 const API_BASE_URL = getApiBaseUrl();
+
+/**
+ * How long review_agent waits for the context scout's answer. When it passes,
+ * the review runs without scouted files.
+ */
+export const AGENT_SCOUT_REQUEST_TIMEOUT_MS = 25_000;
 
 export class ApiClient {
     constructor(private readonly apiKey: string) { }
@@ -153,7 +161,51 @@ export class ApiClient {
             body.localDiagnostics = params.localDiagnostics;
         }
 
+        // An array, not a map, because the order is the scout's rank, most
+        // useful first.
+        if (params.scoutedFiles && params.scoutedFiles.length > 0) {
+            body.scoutedFiles = params.scoutedFiles.map((f) => ({
+                path: f.path,
+                content: Buffer.from(f.content, 'utf-8').toString('base64'),
+            }));
+        }
+
+        if (params.reviewTicket) {
+            body.reviewTicket = params.reviewTicket;
+        }
+
         return body;
+    }
+
+    /**
+     * Asks the backend which repository files the agent review will need
+     * (POST /api/review/agent/context). The answer's reviewTicket goes with the
+     * review that follows, so the two count as one review. Returns null on 404,
+     * which a backend without the endpoint answers; the caller then reviews as
+     * before.
+     */
+    async scoutAgentContext(params: AgentContextRequest): Promise<AgentContextResult | null> {
+        const response = await fetch(`${API_BASE_URL}/api/review/agent/context`, {
+            method: 'POST',
+            signal: AbortSignal.timeout(AGENT_SCOUT_REQUEST_TIMEOUT_MS),
+            headers: {
+                ...CLIENT_HEADERS,
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${this.apiKey}`,
+            },
+            body: JSON.stringify({
+                patch: Buffer.from(params.patch, 'utf-8').toString('base64'),
+                providedPaths: params.providedPaths,
+                repositoryPaths: params.repositoryPaths,
+                ...(params.repositoryName ? { repositoryName: params.repositoryName } : {}),
+            }),
+        });
+
+        if (response.status === 404) return null;
+        if (!response.ok) {
+            await this.throwApiError(response);
+        }
+        return await response.json() as AgentContextResult;
     }
 
     /**

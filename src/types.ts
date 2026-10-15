@@ -78,6 +78,50 @@ export interface AgentReviewResponse {
     meta?: { mode: 'agent'; durationMs: number };
 }
 
+/** Input to ApiClient.scoutAgentContext; the client base64-encodes the patch. */
+export interface AgentContextRequest {
+    /** Plain text; the client base64-encodes it. */
+    patch: string;
+    /** Files the review already sends: the changed files and the related files. */
+    providedPaths: string[];
+    /** Every tracked file in the repository (`git ls-files`). */
+    repositoryPaths: string[];
+    repositoryName?: string;
+}
+
+/** The backend's answer from POST /api/review/agent/context. */
+export interface AgentContextResult {
+    /** rank 1 is the file the reviewer most likely needs. */
+    paths: Array<{ path: string; rank: number }>;
+    skipped: boolean;
+    reason?: string;
+    meta?: { durationMs: number };
+    /** Sent with the review that follows, so the scout and the review count as one review. */
+    reviewTicket?: string;
+    reviewCount?: ReviewStatus;
+}
+
+/** A file the scout chose, with its plain-text content. */
+export interface AgentScoutedFile {
+    path: string;
+    content: string;
+}
+
+/** The backend's skip reasons for POST /api/review/agent/context. */
+export const AGENT_SCOUT_BACKEND_SKIP_REASONS = ['timeout', 'input_too_large'] as const;
+
+/** Why the scout did not run or picked nothing: 'small_change' is the MCP's own reason, the rest are the backend's. */
+export type AgentScoutSkipReason = 'small_change' | typeof AGENT_SCOUT_BACKEND_SKIP_REASONS[number];
+
+/** What the scout step did, reported in the review's structured output. */
+export interface AgentScoutMeta {
+    durationMs: number;
+    /** The scouted files sent with the review. */
+    files: string[];
+    skipped: boolean;
+    reason?: AgentScoutSkipReason;
+}
+
 /**
  * Outcome of submitting an agent review with `async: true`. A backend with the
  * async path answers 202 with a reviewId to poll ('accepted'); one without it
@@ -116,6 +160,10 @@ export interface AgentReviewRequest {
     relatedFiles?: Record<string, string>;
     /** Plain-text (NOT base64) output of a local tsc/eslint/LSP run. */
     localDiagnostics?: string;
+    /** Files the context scout chose, in rank order; the client base64-encodes the content. */
+    scoutedFiles?: AgentScoutedFile[];
+    /** Ticket from the scout, so the scout and this review count as one review. */
+    reviewTicket?: string;
 }
 
 export interface ParsedFileComment {
