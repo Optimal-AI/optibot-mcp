@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { z } from 'zod';
 
 // Use hoisted mocks so they survive restoreMocks
 const mockReadConfig = vi.fn();
@@ -234,6 +235,13 @@ describe('review tools', () => {
                 warnings: [],
             };
 
+            // The SDK validates structuredContent against the declared output
+            // schema before a result leaves the server; this runs the same check.
+            const expectValidOutput = (result: any) => {
+                const schema = z.object(registeredToolConfigs.get('review_agent').outputSchema);
+                expect(() => schema.parse(result.structuredContent)).not.toThrow();
+            };
+
             beforeEach(() => {
                 mockReadConfig.mockResolvedValue({ apiKey: 'key' });
                 mockGetRepoRoot.mockResolvedValue('/repo');
@@ -268,6 +276,7 @@ describe('review tools', () => {
                     scout: { durationMs: 900, files: ['src/c.ts', 'src/d.ts'], skipped: false },
                 });
                 expect(result.content[0].text).toContain('Context step: sent 2 more file(s) with the review: src/c.ts, src/d.ts');
+                expectValidOutput(result);
             });
 
             it('shares one upload budget between the changed files, the related files, and the scout', async () => {
@@ -282,6 +291,7 @@ describe('review tools', () => {
                 const result: any = await registeredTools.get('review_agent')!({}, mockExtra);
 
                 expect(result.structuredContent.meta.scout).toEqual({ durationMs: 0, files: [], skipped: true, reason: 'small_change' });
+                expectValidOutput(result);
                 expect(result.content[0].text).toBe('rendered');
             });
 
@@ -292,6 +302,7 @@ describe('review tools', () => {
                 const result: any = await registeredTools.get('review_agent')!({}, mockExtra);
 
                 expect(result.structuredContent.meta).toEqual({ scout: scouted.meta });
+                expectValidOutput(result);
             });
 
             it('skips the scout when scout is false, and reports no scout meta', async () => {
@@ -300,6 +311,7 @@ describe('review tools', () => {
                 expect(mockRunScout).not.toHaveBeenCalled();
                 expect(mockApiSubmitAgentReview).toHaveBeenCalledWith(expect.objectContaining({ scoutedFiles: [], reviewTicket: undefined }));
                 expect(result.structuredContent.meta).toEqual({ mode: 'agent', durationMs: 1200 });
+                expectValidOutput(result);
             });
 
             it('passes the scout warnings on, stripped of control characters', async () => {
@@ -338,6 +350,7 @@ describe('review tools', () => {
                 expect(result.structuredContent.meta.scout.files).toEqual([]);
                 expect(result.structuredContent.warnings).toEqual([expect.stringContaining('too large')]);
                 expect(result.content[0].text).not.toContain('Context step: sent');
+                expectValidOutput(result);
             });
 
             it('does not retry a 413 that reports the context window', async () => {

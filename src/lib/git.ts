@@ -528,6 +528,18 @@ export async function getTrackedFiles(repoRoot: string): Promise<string[]> {
     return stdout.split('\0').filter((p) => p.length > 0);
 }
 
+/** True when the requested path or the file it resolves to has a `.git` path component. */
+async function isInsideGitDir(requestedPath: string, absolutePath: string, repoRoot: string): Promise<boolean> {
+    let realRoot: string;
+    try {
+        realRoot = await fs.realpath(repoRoot);
+    } catch {
+        realRoot = path.resolve(repoRoot);
+    }
+    const hasGitPart = (p: string) => p.split(/[\\/]+/).some((part) => part.toLowerCase() === '.git');
+    return hasGitPart(requestedPath) || hasGitPart(path.relative(realRoot, absolutePath));
+}
+
 export type ScoutedFileRead =
     | { ok: true; content: string }
     | { ok: false; warning: string };
@@ -555,6 +567,13 @@ export async function readScoutedFile(
         return { ok: false, warning: `Skipped scouted file: not a readable file inside the repository: ${requestedPath}` };
     }
     const absolutePath = screened.absolutePath;
+
+    // Git's own directory is inside the repository but never part of it, and
+    // its config can hold remote URLs with credentials. A tracked symlink can
+    // point there under a harmless name, so the resolved path is checked too.
+    if (await isInsideGitDir(requestedPath, absolutePath, repoRoot)) {
+        return { ok: false, warning: `Skipped scouted file: it is inside the .git directory: ${requestedPath}` };
+    }
 
     // Both names, so an ignored link cannot pass under a tracked name.
     const ignored = await gitIgnoreStatus(repoRoot, [requestedPath, absolutePath]);

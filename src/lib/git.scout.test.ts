@@ -114,6 +114,20 @@ describe('readScoutedFile', () => {
         expect(read).toEqual({ ok: false, warning: expect.stringContaining('ignored by git') });
     });
 
+    it('refuses a tracked symlink into the .git directory', async () => {
+        fs.symlinkSync(path.join('.git', 'config'), path.join(repo, 'notes.md'));
+        execFileSync('git', ['add', 'notes.md'], { cwd: repo });
+        expect(await getTrackedFiles(repo)).toContain('notes.md');
+
+        const read = await readScoutedFile('notes.md', repo, createUploadBudget());
+        expect(read).toEqual({ ok: false, warning: expect.stringContaining('inside the .git directory') });
+    });
+
+    it('refuses a path that names the .git directory directly', async () => {
+        const read = await readScoutedFile('.git/config', repo, createUploadBudget());
+        expect(read).toEqual({ ok: false, warning: expect.stringContaining('inside the .git directory') });
+    });
+
     it('refuses binary content under a text-looking name', async () => {
         const read = await readScoutedFile('img/raw.dat', repo, createUploadBudget());
         expect(read).toEqual({ ok: false, warning: expect.stringContaining('binary') });
