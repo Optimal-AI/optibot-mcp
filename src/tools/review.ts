@@ -40,7 +40,7 @@ type AgentReviewRunner = Pick<ApiClient, 'submitAgentReview' | 'getAgentReviewRe
  *
  * A failed result carries `errorType` naming the kinds the server can tell
  * apart, so the host is told which of them happened rather than being handed
- * text the server documents as unparseable.
+ * free-form error text.
  */
 export async function runAgentReview(
     client: AgentReviewRunner,

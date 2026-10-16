@@ -189,9 +189,9 @@ function mockExecPerCommandWithErrors(
 
 describe('getRepoRoot', () => {
     it('returns trimmed stdout from git rev-parse', async () => {
-        mockExecFile('/Users/me/project\n');
+        mockExecFile('/home/alice/project\n');
         const root = await getRepoRoot();
-        expect(root).toBe('/Users/me/project');
+        expect(root).toBe('/home/alice/project');
     });
 
     it('throws when not in a git repository', async () => {
@@ -202,12 +202,12 @@ describe('getRepoRoot', () => {
 
 describe('parseRepoNameFromRemoteUrl', () => {
     it.each([
-        ['git@github.com:Optimal-AI/optibot-be.git', 'optibot-be'],
-        ['https://github.com/Optimal-AI/optibot-be.git', 'optibot-be'],
-        ['https://github.com/Optimal-AI/optibot-be', 'optibot-be'],
-        ['https://github.com/Optimal-AI/optibot-be/\n', 'optibot-be'],
+        ['git@github.com:acme/acme-api.git', 'acme-api'],
+        ['https://github.com/acme/acme-api.git', 'acme-api'],
+        ['https://github.com/acme/acme-api', 'acme-api'],
+        ['https://github.com/acme/acme-api/\n', 'acme-api'],
         ['ssh://git@gitlab.example.com:2222/group/sub/project.git', 'project'],
-        ['/srv/mirrors/optibot-be.git', 'optibot-be'],
+        ['/srv/mirrors/acme-api.git', 'acme-api'],
     ])('%s -> %s', (url, expected) => {
         expect(parseRepoNameFromRemoteUrl(url)).toBe(expected);
     });
@@ -237,23 +237,23 @@ describe('getRepoName', () => {
 
     it('uses the origin remote, not the worktree folder', async () => {
         mockGit({
-            remote: 'git@github.com:Optimal-AI/optibot-be.git\n',
-            commonDir: '/Users/me/optibot-be/.git\n',
-            toplevel: '/Users/me/optibot-be/.claude/worktrees/modest-mahavira-5a035b\n',
+            remote: 'git@github.com:acme/acme-api.git\n',
+            commonDir: '/home/alice/acme-api/.git\n',
+            toplevel: '/home/alice/acme-api/.claude/worktrees/feature-a1b2c3\n',
         });
-        expect(await getRepoName()).toBe('optibot-be');
+        expect(await getRepoName()).toBe('acme-api');
     });
 
     it('uses the origin remote for a checkout in a renamed folder', async () => {
-        mockGit({ remote: 'https://github.com/Optimal-AI/optibot-be.git\n', toplevel: '/tmp/optibot-be__2379\n' });
-        expect(await getRepoName()).toBe('optibot-be');
+        mockGit({ remote: 'https://github.com/acme/acme-api.git\n', toplevel: '/tmp/acme-api__2379\n' });
+        expect(await getRepoName()).toBe('acme-api');
     });
 
     it('falls back to the main checkout folder when there is no origin remote', async () => {
         mockGit({
             remote: new Error("No such remote 'origin'"),
-            commonDir: '/Users/me/my-project/.git\n',
-            toplevel: '/Users/me/my-project/.claude/worktrees/some-worktree\n',
+            commonDir: '/home/alice/my-project/.git\n',
+            toplevel: '/home/alice/my-project/.claude/worktrees/some-worktree\n',
         });
         expect(await getRepoName()).toBe('my-project');
     });
@@ -264,7 +264,7 @@ describe('getRepoName', () => {
     });
 
     it('falls back to the repo root folder when git cannot report the common dir', async () => {
-        mockGit({ remote: new Error('no remote'), commonDir: new Error('unknown option'), toplevel: '/Users/me/my-project\n' });
+        mockGit({ remote: new Error('no remote'), commonDir: new Error('unknown option'), toplevel: '/home/alice/my-project\n' });
         expect(await getRepoName()).toBe('my-project');
     });
 });
@@ -648,7 +648,7 @@ describe('getRelatedFileContents', () => {
         // The lexical check passes for this path; only realpath exposes that
         // the link resolves outside the repository.
         vi.mocked(fs.realpath).mockImplementation((async (p: unknown) =>
-            String(p).endsWith('notes.md') ? '/Users/someone/.ssh/id_rsa' : path.resolve(String(p))) as never);
+            String(p).endsWith('notes.md') ? '/home/someone/.ssh/id_rsa' : path.resolve(String(p))) as never);
 
         const { contents, warnings } = await getRelatedFileContents(['notes.md'], '/repo');
 
@@ -734,7 +734,7 @@ describe('readDiagnosticsFile', () => {
 
     it('refuses a symlink inside the repo whose target escapes it', async () => {
         vi.mocked(fs.realpath).mockImplementation((async (p: unknown) =>
-            String(p).endsWith('tsc.log') ? '/Users/someone/.ssh/id_rsa' : path.resolve(String(p))) as never);
+            String(p).endsWith('tsc.log') ? '/home/someone/.ssh/id_rsa' : path.resolve(String(p))) as never);
 
         await expect(readDiagnosticsFile('build/tsc.log', '/repo')).rejects.toThrow(
             'must be a readable file within the repository'

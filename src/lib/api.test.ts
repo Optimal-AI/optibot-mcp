@@ -458,10 +458,10 @@ describe('ApiClient', () => {
         it('reports the backend error field, not just message', async () => {
             // Every agent-mode error body uses `error`; reading only `message`
             // dropped the actionable text.
-            mockErrorResponse(413, { error: 'The diff is too large for the review model.' });
+            mockErrorResponse(413, { error: 'The diff is too large to review.' });
 
             await expect(client.getAgentReviewResult('apirev_1')).rejects.toThrow(
-                'The diff is too large for the review model.',
+                'The diff is too large to review.',
             );
         });
     });
