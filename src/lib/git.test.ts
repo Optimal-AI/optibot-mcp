@@ -456,6 +456,26 @@ describe('getFileContents', () => {
         expect(result['a.ts']).toBe('file content');
     });
 
+    it('skips an untracked file whose content holds a credential, but sends a modified one', async () => {
+        const mockHandle = {
+            read: vi.fn(async (buf: Buffer) => {
+                const data = Buffer.from('text');
+                data.copy(buf, 0);
+                return { bytesRead: data.length, buffer: buf };
+            }),
+            close: vi.fn().mockResolvedValue(undefined),
+        };
+        vi.mocked(fs.open).mockResolvedValue(mockHandle as any);
+        vi.mocked(fs.readFile).mockResolvedValue('-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaA\n' as never);
+
+        const result = await getFileContents(
+            [{ relativePath: 'notes.txt', status: '?' }, { relativePath: 'src/config.ts', status: 'M' }],
+            '/repo'
+        );
+        expect(result['notes.txt']).toBeUndefined();
+        expect(result['src/config.ts']).toBeDefined();
+    });
+
     it('skips deleted files', async () => {
         const result = await getFileContents(
             [{ relativePath: 'deleted.ts', status: 'D' }],

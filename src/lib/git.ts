@@ -198,6 +198,17 @@ export const UNTRACKED_DIFF_MAX_FILES = 1_000;
 /** How many untracked files are screened or diffed at once. */
 const UNTRACKED_DIFF_CONCURRENCY = 8;
 
+/**
+ * The kind of credential in an untracked file's content, logged when found.
+ * A file git does not track yet is often local notes or a scratch config, so
+ * one that holds a key or token is kept out of the review entirely.
+ */
+function untrackedSecretKind(relativePath: string, content: string): string | null {
+    const kind = findSecretInContent(content);
+    if (kind) console.error(`[security] Skipping new file that contains what looks like a ${kind}: ${relativePath}`);
+    return kind;
+}
+
 /** Runs `task` over `items` with at most `limit` in flight, keeping results in input order. */
 async function mapWithConcurrency<T, R>(items: T[], limit: number, task: (item: T) => Promise<R>): Promise<R[]> {
     const results = new Array<R>(items.length);
@@ -215,7 +226,8 @@ async function mapWithConcurrency<T, R>(items: T[], limit: number, task: (item: 
 /**
  * Each untracked, non-ignored file as an added-file diff. Every path passes
  * screenReadablePath first, so a file getFileContents would refuse, such as a
- * credential file or a link out of the repository, stays out of the patch too.
+ * credential file or a link out of the repository, stays out of the patch too,
+ * and so does a file whose content holds a credential.
  * Files are taken in git's order until one of the UNTRACKED_DIFF_* limits is
  * reached; each file left out is logged and still goes with the review as file
  * content. `git diff --no-index` compares against /dev/null without touching
@@ -228,32 +240,39 @@ async function getUntrackedDiff(repoRoot: string): Promise<string> {
     });
     const untracked = stdout.split('\0').filter((p) => p.length > 0);
 
-    const sizes = await mapWithConcurrency(untracked, UNTRACKED_DIFF_CONCURRENCY, async (relativePath) => {
+    const screenedFiles = await mapWithConcurrency(untracked, UNTRACKED_DIFF_CONCURRENCY, async (relativePath) => {
         const screened = await screenReadablePath(relativePath, repoRoot);
         if (!screened.ok) return null;
         try {
-            return (await fs.stat(screened.absolutePath)).size;
+            return { relativePath, absolutePath: screened.absolutePath, size: (await fs.stat(screened.absolutePath)).size };
         } catch {
             return null;
         }
     });
 
-    const selected: string[] = [];
+    const selected: Array<{ relativePath: string; absolutePath: string }> = [];
     let total = 0;
-    untracked.forEach((relativePath, index) => {
-        const size = sizes[index];
-        if (size === null) return;
+    screenedFiles.forEach((file) => {
+        if (file === null) return;
+        const { relativePath, size } = file;
         if (size > UNTRACKED_DIFF_MAX_FILE_BYTES
             || total + size > UNTRACKED_DIFF_MAX_TOTAL_BYTES
             || selected.length >= UNTRACKED_DIFF_MAX_FILES) {
             console.error(`[review] New file left out of the diff (size or count limit), sent as file content only: ${relativePath}`);
             return;
         }
-        selected.push(relativePath);
+        selected.push(file);
         total += size;
     });
 
-    const diffs = await mapWithConcurrency(selected, UNTRACKED_DIFF_CONCURRENCY, async (relativePath) => {
+    // Content is read only for the files within the limits, so a working copy
+    // with many new files costs at most UNTRACKED_DIFF_MAX_TOTAL_BYTES of reads.
+    const diffs = await mapWithConcurrency(selected, UNTRACKED_DIFF_CONCURRENCY, async ({ relativePath, absolutePath }) => {
+        try {
+            if (untrackedSecretKind(relativePath, await fs.readFile(absolutePath, 'utf-8'))) return '';
+        } catch {
+            return '';
+        }
         try {
             await execFile('git', ['diff', '--no-index', '--', '/dev/null', relativePath], {
                 cwd: repoRoot,
@@ -405,6 +424,7 @@ export async function getFileContents(
             if (await isBinaryFile(absolutePath)) continue;
 
             const content = await fs.readFile(absolutePath, 'utf-8');
+            if (file.status === '?' && untrackedSecretKind(file.relativePath, content)) continue;
             const size = Buffer.byteLength(content, 'utf-8');
             if (!budget.canFit(size)) {
                 truncated += 1;

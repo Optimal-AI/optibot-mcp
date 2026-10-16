@@ -44,6 +44,8 @@ describe.skipIf(!HAS_GIT)('getDiffHead with untracked files', () => {
         fs.writeFileSync(path.join(repo, 'settings.local'), 'ignored\n');
         fs.writeFileSync(path.join(repo, '.env'), 'SECRET=1\n');
         fs.writeFileSync(path.join(repo, 'empty.ts'), '');
+        // A placeholder private key header, which the content check matches.
+        fs.writeFileSync(path.join(repo, 'notes.txt'), '-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaA\n');
     });
 
     afterAll(() => {
@@ -62,6 +64,10 @@ describe.skipIf(!HAS_GIT)('getDiffHead with untracked files', () => {
         const diff = await getDiffHead(repo);
         expect(diff).not.toContain('settings.local');
         expect(diff).not.toContain('.env');
+    });
+
+    it('leaves out a new file whose content holds a credential', async () => {
+        expect(await getDiffHead(repo)).not.toContain('notes.txt');
     });
 
     it('lists an empty new file as an added file', async () => {
