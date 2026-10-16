@@ -22,6 +22,7 @@
 
 ### Fixed
 
+- `review_agent` and `review_local_changes` review new files that git does not ignore as part of the change. Before, a new file reached the reviewer only as context, and a change made only of new files returned "No changes to review."
 - `get_security_scan` on an unknown scan id suggests `list_security_scans`.
 - Tool descriptions describe what each tool does rather than how the service works.
 - Review progress notifications strip control characters from the tool name and file path or search pattern they show.

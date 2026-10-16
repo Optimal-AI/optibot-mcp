@@ -175,12 +175,48 @@ export async function getRepoName(): Promise<string> {
     return path.basename(root);
 }
 
+/**
+ * The uncommitted changes against HEAD, with each untracked file that git does
+ * not ignore added as a new file. `git diff HEAD` leaves untracked files out,
+ * so without them a new file reached the reviewer only as context, and a
+ * change made only of new files read as no change at all.
+ */
 export async function getDiffHead(repoRoot: string): Promise<string> {
     const { stdout } = await execFile('git', ['diff', 'HEAD'], {
         cwd: repoRoot,
         maxBuffer: 50 * 1024 * 1024,
     });
-    return stdout;
+    return stdout + await getUntrackedDiff(repoRoot);
+}
+
+/**
+ * Each untracked, non-ignored file as an added-file diff. Every path passes
+ * screenReadablePath first, so a file getFileContents would refuse, such as a
+ * credential file or a link out of the repository, stays out of the patch too.
+ * `git diff --no-index` compares against /dev/null without touching the index.
+ */
+async function getUntrackedDiff(repoRoot: string): Promise<string> {
+    const { stdout } = await execFile('git', ['ls-files', '-z', '--others', '--exclude-standard'], {
+        cwd: repoRoot,
+        maxBuffer: 50 * 1024 * 1024,
+    });
+    const diffs: string[] = [];
+    for (const relativePath of stdout.split('\0').filter((p) => p.length > 0)) {
+        const screened = await screenReadablePath(relativePath, repoRoot);
+        if (!screened.ok) continue;
+        try {
+            await execFile('git', ['diff', '--no-index', '--', '/dev/null', relativePath], {
+                cwd: repoRoot,
+                maxBuffer: 50 * 1024 * 1024,
+            });
+        } catch (err: unknown) {
+            // Exit 1 means the files differ, which a new file always does, and
+            // stdout holds the diff. Any other failure leaves the file out.
+            const { code, stdout: diff } = err as { code?: unknown; stdout?: unknown };
+            if (code === 1 && typeof diff === 'string') diffs.push(diff);
+        }
+    }
+    return diffs.join('');
 }
 
 export async function getDiffBranch(targetBranch: string, repoRoot: string): Promise<string> {

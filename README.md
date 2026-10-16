@@ -138,7 +138,7 @@ Once configured, just ask your AI assistant naturally:
 
 | Tool | Description |
 |------|-------------|
-| `review_local_changes` | Review uncommitted local changes (git diff HEAD) |
+| `review_local_changes` | Review uncommitted local changes (git diff HEAD, plus new files git does not ignore) |
 | `review_agent` | Agent-mode review of uncommitted local changes — returns structured findings (severity, category, confidence, file and line range), a summary, and an overall pass/fail |
 | `review_branch` | Review changes against a target branch (auto-detects or specify) |
 | `review_diff_file` | Review an arbitrary diff/patch file |

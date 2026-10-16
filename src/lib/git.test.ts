@@ -59,6 +59,19 @@ function mockExecFile(stdout: string, stderr = '') {
     }) as any);
 }
 
+/** Answers each execFile call by its joined arguments, and with empty output otherwise. */
+function mockExecFilePerArgs(responses: Record<string, string>) {
+    execFileMock.mockImplementation(((
+        _file: string,
+        args: string[],
+        _opts: any,
+        cb?: (err: Error | null, result: { stdout: string; stderr: string }) => void
+    ) => {
+        const callback = typeof _opts === 'function' ? _opts : cb;
+        callback!(null, { stdout: responses[args.join(' ')] ?? '', stderr: '' });
+    }) as any);
+}
+
 function mockAll(stdout: string, stderr = '') {
     mockExec(stdout, stderr);
     mockExecFile(stdout, stderr);
@@ -258,13 +271,13 @@ describe('getRepoName', () => {
 
 describe('getDiffHead', () => {
     it('returns stdout from git diff HEAD', async () => {
-        mockExecFile('diff --git a/file.ts b/file.ts\n');
+        mockExecFilePerArgs({ 'diff HEAD': 'diff --git a/file.ts b/file.ts\n' });
         const diff = await getDiffHead('/repo');
         expect(diff).toBe('diff --git a/file.ts b/file.ts\n');
     });
 
     it('calls execFile with correct cwd and maxBuffer', async () => {
-        mockExecFile('');
+        mockExecFilePerArgs({});
         await getDiffHead('/repo');
         expect(execFileMock).toHaveBeenCalledWith(
             'git',

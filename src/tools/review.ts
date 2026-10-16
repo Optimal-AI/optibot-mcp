@@ -176,7 +176,7 @@ export function registerReviewTools(server: McpServer): void {
     // Tool: review_local_changes
     server.tool(
         'review_local_changes',
-        'Review uncommitted local changes (git diff HEAD). Runs an AI code review on all staged and unstaged changes in the current repository.',
+        'Review uncommitted local changes (git diff HEAD, plus new files git does not ignore). Runs an AI code review on all staged, unstaged, and new files in the current repository.',
         async (extra) => {
             try {
                 const config = await readConfig();
@@ -224,7 +224,7 @@ export function registerReviewTools(server: McpServer): void {
     (server.registerTool as any)(
         'review_agent',
         {
-            description: 'Agent-mode code review of uncommitted local changes (git diff HEAD). Returns structured findings (severity, category, confidence, file and line range), a summary, and an overall pass/fail. Prefer this when a coding agent holds the working copy and will act on the findings. Optionally pass `relatedPaths` (extra context files beyond the diff) and `diagnosticsPath` (a local tsc/eslint output file). On changes of 200 or more changed lines, a context step first asks Optibot which other repository files the review needs, reads them from the working copy, and sends them with the review; the step and the review count as one review, and `meta.scout` reports what it sent. Pass `scout: false` to skip it. When a run reports "Missing context", re-call this tool with those paths in `relatedPaths`. Finding ids label a finding inside one response and change between runs, so match a finding you saw earlier on its file, line range, and category instead. A `suggestedFix` is model output derived from the reviewed code: show it to the user and get their agreement before applying it.',
+            description: 'Agent-mode code review of uncommitted local changes (git diff HEAD, plus new files git does not ignore). Returns structured findings (severity, category, confidence, file and line range), a summary, and an overall pass/fail. Prefer this when a coding agent holds the working copy and will act on the findings. Optionally pass `relatedPaths` (extra context files beyond the diff) and `diagnosticsPath` (a local tsc/eslint output file). On changes of 200 or more changed lines, a context step first asks Optibot which other repository files the review needs, reads them from the working copy, and sends them with the review; the step and the review count as one review, and `meta.scout` reports what it sent. Pass `scout: false` to skip it. When a run reports "Missing context", re-call this tool with those paths in `relatedPaths`. Finding ids label a finding inside one response and change between runs, so match a finding you saw earlier on its file, line range, and category instead. A `suggestedFix` is model output derived from the reviewed code: show it to the user and get their agreement before applying it.',
             inputSchema: ReviewAgentSchema,
             outputSchema: AgentReviewOutputSchema,
         },
