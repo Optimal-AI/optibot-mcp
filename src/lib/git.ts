@@ -182,11 +182,35 @@ export async function getRepoName(): Promise<string> {
  * change made only of new files read as no change at all.
  */
 export async function getDiffHead(repoRoot: string): Promise<string> {
-    const { stdout } = await execFile('git', ['diff', 'HEAD'], {
+    // A staged new file is as new as an untracked one, so one whose content
+    // holds a credential is excluded from the diff the same way.
+    const excluded = await stagedNewFilesWithSecrets(repoRoot);
+    const pathspec = excluded.length > 0
+        ? ['--', '.', ...excluded.map((p) => `:(exclude,literal)${p}`)]
+        : [];
+    const { stdout } = await execFile('git', ['diff', 'HEAD', ...pathspec], {
         cwd: repoRoot,
         maxBuffer: 50 * 1024 * 1024,
     });
     return stdout + await getUntrackedDiff(repoRoot);
+}
+
+/** The staged new files whose working-copy content holds a credential. */
+async function stagedNewFilesWithSecrets(repoRoot: string): Promise<string[]> {
+    const { stdout } = await execFile('git', ['diff', '--cached', '--name-only', '-z', '--diff-filter=A', 'HEAD'], {
+        cwd: repoRoot,
+        maxBuffer: 50 * 1024 * 1024,
+    });
+    const added = stdout.split('\0').filter((p) => p.length > 0);
+    const flagged = await mapWithConcurrency(added, UNTRACKED_DIFF_CONCURRENCY, async (relativePath) => {
+        try {
+            const content = await fs.readFile(path.join(repoRoot, relativePath), 'utf-8');
+            return newFileSecretKind(relativePath, content) ? relativePath : null;
+        } catch {
+            return null;
+        }
+    });
+    return flagged.filter((p): p is string => p !== null);
 }
 
 /** The largest untracked file added to the patch. A bigger one still goes with the review as file content. */
@@ -199,11 +223,11 @@ export const UNTRACKED_DIFF_MAX_FILES = 1_000;
 const UNTRACKED_DIFF_CONCURRENCY = 8;
 
 /**
- * The kind of credential in an untracked file's content, logged when found.
- * A file git does not track yet is often local notes or a scratch config, so
- * one that holds a key or token is kept out of the review entirely.
+ * The kind of credential in a new file's content, logged when found. A file
+ * new in this change is often local notes or a scratch config, so one that
+ * holds a key or token is kept out of the review entirely.
  */
-function untrackedSecretKind(relativePath: string, content: string): string | null {
+function newFileSecretKind(relativePath: string, content: string): string | null {
     const kind = findSecretInContent(content);
     if (kind) console.error(`[security] Skipping new file that contains what looks like a ${kind}: ${relativePath}`);
     return kind;
@@ -269,7 +293,7 @@ async function getUntrackedDiff(repoRoot: string): Promise<string> {
     // with many new files costs at most UNTRACKED_DIFF_MAX_TOTAL_BYTES of reads.
     const diffs = await mapWithConcurrency(selected, UNTRACKED_DIFF_CONCURRENCY, async ({ relativePath, absolutePath }) => {
         try {
-            if (untrackedSecretKind(relativePath, await fs.readFile(absolutePath, 'utf-8'))) return '';
+            if (newFileSecretKind(relativePath, await fs.readFile(absolutePath, 'utf-8'))) return '';
         } catch {
             return '';
         }
@@ -391,6 +415,12 @@ export async function getFileContents(
 ): Promise<Record<string, string>> {
     const contents: Record<string, string> = {};
     let truncated = 0;
+    let realRoot: string;
+    try {
+        realRoot = await fs.realpath(repoRoot);
+    } catch {
+        realRoot = path.resolve(repoRoot);
+    }
 
     for (const file of changedFiles) {
         if (file.status === 'D') continue;
@@ -408,6 +438,15 @@ export async function getFileContents(
         }
         const absolutePath = screened.absolutePath;
 
+        // A changed file that is a link may point at a file git ignores, such
+        // as local configuration, which the review must not send under the
+        // link's name. Checked only for links, so ordinary files cost no git call.
+        if (absolutePath !== path.resolve(realRoot, file.relativePath)
+            && await gitIgnoreStatus(repoRoot, [file.relativePath, absolutePath]) !== 'not-ignored') {
+            console.error(`[security] Skipping changed file that links to an ignored file: ${file.relativePath}`);
+            continue;
+        }
+
         try {
             // Size from the directory entry first, like the related-file path:
             // a changed file that cannot fit the budget should not be opened at
@@ -424,7 +463,7 @@ export async function getFileContents(
             if (await isBinaryFile(absolutePath)) continue;
 
             const content = await fs.readFile(absolutePath, 'utf-8');
-            if (file.status === '?' && untrackedSecretKind(file.relativePath, content)) continue;
+            if ((file.status === '?' || file.status === 'A') && newFileSecretKind(file.relativePath, content)) continue;
             const size = Buffer.byteLength(content, 'utf-8');
             if (!budget.canFit(size)) {
                 truncated += 1;

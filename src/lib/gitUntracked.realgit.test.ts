@@ -6,7 +6,9 @@ import * as path from 'path';
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 
 import {
+    getChangedFiles,
     getDiffHead,
+    getFileContents,
     UNTRACKED_DIFF_MAX_FILE_BYTES,
     UNTRACKED_DIFF_MAX_FILES,
     UNTRACKED_DIFF_MAX_TOTAL_BYTES,
@@ -147,5 +149,53 @@ describe.skipIf(!HAS_GIT)('getDiffHead with untracked files', () => {
             expect(diff.match(/^diff --git /gm)).toHaveLength(UNTRACKED_DIFF_MAX_FILES);
             fs.rmSync(path.join(limited, 'three'), { recursive: true });
         }, 60_000);
+    });
+
+    it('leaves out a staged new file whose content holds a credential, and keeps other staged files', async () => {
+        const staged = fs.mkdtempSync(path.join(os.tmpdir(), 'optibot-staged-'));
+        try {
+            const git = (...args: string[]) => execFileSync('git', args, { cwd: staged });
+            git('init', '-q');
+            git('config', 'user.email', 'test@example.com');
+            git('config', 'user.name', 'Test');
+            fs.writeFileSync(path.join(staged, 'base.ts'), 'export const a = 1;\n');
+            git('add', '.');
+            git('commit', '-q', '-m', 'base');
+            // A placeholder private key header, which the content check matches.
+            fs.writeFileSync(path.join(staged, 'keys.txt'), '-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaA\n');
+            fs.writeFileSync(path.join(staged, 'added.ts'), 'export const c = 3;\n');
+            git('add', 'keys.txt', 'added.ts');
+
+            const diff = await getDiffHead(staged);
+            expect(diff).toContain('+++ b/added.ts');
+            expect(diff).not.toContain('keys.txt');
+
+            const contents = await getFileContents(await getChangedFiles(staged), staged);
+            expect(Object.keys(contents)).toEqual(['added.ts']);
+        } finally {
+            fs.rmSync(staged, { recursive: true, force: true });
+        }
+    });
+
+    it('does not send a changed file that links to an ignored file', async () => {
+        const linked = fs.mkdtempSync(path.join(os.tmpdir(), 'optibot-link-'));
+        try {
+            const git = (...args: string[]) => execFileSync('git', args, { cwd: linked });
+            git('init', '-q');
+            git('config', 'user.email', 'test@example.com');
+            git('config', 'user.name', 'Test');
+            fs.writeFileSync(path.join(linked, '.gitignore'), '*.local\n');
+            git('add', '.');
+            git('commit', '-q', '-m', 'base');
+            fs.writeFileSync(path.join(linked, 'settings.local'), 'token = placeholder\n');
+            fs.symlinkSync('settings.local', path.join(linked, 'notes.ts'));
+            fs.writeFileSync(path.join(linked, 'plain.ts'), 'export const d = 4;\n');
+
+            const contents = await getFileContents(await getChangedFiles(linked), linked);
+            expect(contents['notes.ts']).toBeUndefined();
+            expect(contents['plain.ts']).toBe('export const d = 4;\n');
+        } finally {
+            fs.rmSync(linked, { recursive: true, force: true });
+        }
     });
 });
