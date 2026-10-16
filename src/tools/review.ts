@@ -8,7 +8,7 @@ import { ReviewProgressService, ReviewProgressEvent } from '../lib/reviewProgres
 import { safeSendLog, ToolExtraLike } from '../lib/notify.js';
 import { waitForAgentReviewResult } from '../lib/agentReviewPolling.js';
 import { runScout, ScoutOutcome } from '../lib/scout.js';
-import { AgentReviewResponse, AgentScoutedFile } from '../types.js';
+import { AGENT_SCOUT_SKIP_REASONS, AgentReviewResponse, AgentScoutedFile } from '../types.js';
 
 const ReviewBranchSchema = {
     branch: z.string().optional().describe('Target branch to compare against. If omitted, auto-detects origin/main, origin/master, or origin/develop.'),
@@ -139,7 +139,8 @@ const AgentReviewOutputSchema = {
             durationMs: z.number(),
             files: z.array(z.string()).describe('Repository files the context step sent with the review.'),
             skipped: z.boolean(),
-            reason: z.string().optional(),
+            reason: z.enum(AGENT_SCOUT_SKIP_REASONS).optional()
+                .describe('Why the step did not run: small_change, timeout, too_large, or unavailable.'),
         }).optional().describe('What the context step did. Absent when it was turned off with scout: false.'),
     }).optional(),
     warnings: z.array(z.string()).optional()

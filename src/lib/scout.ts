@@ -4,7 +4,6 @@ import * as git from './git.js';
 import { sanitizeServerText } from './output.js';
 import { safeSendLog, ToolExtraLike } from './notify.js';
 import {
-    AGENT_SCOUT_BACKEND_SKIP_REASONS,
     AgentScoutedFile,
     AgentScoutMeta,
     AgentScoutSkipReason,
@@ -44,22 +43,22 @@ export function normalizeContextPath(p: string): string {
 }
 
 /**
- * The most repository-path characters review_agent sends to the context scout,
+ * The most repository-path bytes review_agent sends to the context scout,
  * counting one separator per path. It only binds on very large repositories,
  * where it keeps the request well under the service's request size limit.
  */
-export const AGENT_SCOUT_MAX_PATH_LIST_CHARS = 4_000_000;
+export const AGENT_SCOUT_MAX_PATH_LIST_BYTES = 4_000_000;
 
 /**
- * Trims `paths` to `maxChars` (each path plus one separator), keeping the paths
- * that share the longest leading directory with a file in `anchorPaths`. Paths
- * with the same shared depth keep their original order. Returns `paths` itself
- * when it already fits.
+ * Trims `paths` to `maxBytes` of UTF-8 (each path plus one separator), keeping
+ * the paths that share the longest leading directory with a file in
+ * `anchorPaths`. Paths with the same shared depth keep their original order.
+ * Returns `paths` itself when it already fits.
  */
-export function capRepositoryPaths(paths: string[], anchorPaths: string[], maxChars: number): string[] {
+export function capRepositoryPaths(paths: string[], anchorPaths: string[], maxBytes: number): string[] {
     let total = 0;
-    for (const p of paths) total += p.length + 1;
-    if (total <= maxChars) return paths;
+    for (const p of paths) total += Buffer.byteLength(p) + 1;
+    if (total <= maxBytes) return paths;
 
     // Every directory prefix of an anchor's directory, such as `a` and `a/b`
     // for `a/b/c.ts`, mapped to its depth.
@@ -84,18 +83,21 @@ export function capRepositoryPaths(paths: string[], anchorPaths: string[], maxCh
     const kept: string[] = [];
     let used = 0;
     for (const { p } of ranked) {
-        if (used + p.length + 1 > maxChars) continue;
+        if (used + Buffer.byteLength(p) + 1 > maxBytes) continue;
         kept.push(p);
-        used += p.length + 1;
+        used += Buffer.byteLength(p) + 1;
     }
     return kept;
 }
 
-/** The backend's skip reason when it is one this client knows, so unexpected server text never reaches the output. */
-function backendSkipReason(reason: unknown): AgentScoutSkipReason | undefined {
-    return (AGENT_SCOUT_BACKEND_SKIP_REASONS as readonly unknown[]).includes(reason)
-        ? (reason as AgentScoutSkipReason)
-        : undefined;
+/**
+ * The reason reported when the service skipped the scout. A timeout and a
+ * too-large change keep their own value; anything else reads as unavailable.
+ */
+function skipReasonFromService(reason: unknown): AgentScoutSkipReason {
+    if (reason === 'timeout') return 'timeout';
+    if (reason === 'input_too_large') return 'too_large';
+    return 'unavailable';
 }
 
 /** What the scout step produced for the review that follows it. */
@@ -149,7 +151,7 @@ export async function runScout(
     try {
         repositoryPaths = await git.getTrackedFiles(repoRoot);
     } catch {
-        return none();
+        return none('unavailable');
     }
     if (repositoryPaths.length === 0) return none();
 
@@ -159,16 +161,16 @@ export async function runScout(
         answer = await client.scoutAgentContext({
             patch: params.patch,
             providedPaths,
-            repositoryPaths: capRepositoryPaths(repositoryPaths, providedPaths, AGENT_SCOUT_MAX_PATH_LIST_CHARS),
+            repositoryPaths: capRepositoryPaths(repositoryPaths, providedPaths, AGENT_SCOUT_MAX_PATH_LIST_BYTES),
             repositoryName: params.repositoryName,
         });
     } catch (err) {
         // The review still runs: the scout must never fail one.
         // AbortSignal.timeout rejects with a DOMException named TimeoutError.
-        return none((err as { name?: string })?.name === 'TimeoutError' ? 'timeout' : undefined);
+        return none((err as { name?: string })?.name === 'TimeoutError' ? 'timeout' : 'unavailable');
     }
     if (typeof answer?.reviewTicket === 'string' && answer.reviewTicket !== '') reviewTicket = answer.reviewTicket;
-    if (!answer || answer.skipped || !Array.isArray(answer.paths)) return none(backendSkipReason(answer?.reason));
+    if (!answer || answer.skipped || !Array.isArray(answer.paths)) return none(skipReasonFromService(answer?.reason));
 
     // Only paths this client sent as tracked, and none it already sends. That
     // also keeps arbitrary server text out of the notice below.

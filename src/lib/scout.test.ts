@@ -9,7 +9,7 @@ vi.mock('./git.js', () => ({
 }));
 
 import {
-    AGENT_SCOUT_MAX_PATH_LIST_CHARS,
+    AGENT_SCOUT_MAX_PATH_LIST_BYTES,
     AGENT_SCOUT_MIN_CHANGED_LINES,
     capRepositoryPaths,
     countChangedLines,
@@ -92,6 +92,12 @@ describe('capRepositoryPaths', () => {
         expect(capRepositoryPaths(paths, ['src/x.ts'], 'src/b.ts'.length + 1)).toEqual(['src/b.ts']);
     });
 
+    it('counts a path in UTF-8 bytes, not characters', () => {
+        // 'é' is one character and two bytes. Counted in characters both paths
+        // fit 9; counted in bytes they need 12, so the second one is dropped.
+        expect(capRepositoryPaths(['ééé', 'b.ts'], ['x.ts'], 9)).toEqual(['ééé']);
+    });
+
     it('treats a root-level anchor as sharing no directory', () => {
         const paths = ['b.ts', 'a/c.ts'];
         expect(capRepositoryPaths(paths, ['x.ts'], 'b.ts'.length + 1)).toEqual(['b.ts']);
@@ -100,13 +106,13 @@ describe('capRepositoryPaths', () => {
 
 describe('runScout', () => {
     it('sends a capped path list when the repository is larger than the cap', async () => {
-        const many = Array.from({ length: 5 }, (_, i) => `vendor/${'x'.repeat(AGENT_SCOUT_MAX_PATH_LIST_CHARS / 4)}${i}.ts`);
+        const many = Array.from({ length: 5 }, (_, i) => `vendor/${'x'.repeat(AGENT_SCOUT_MAX_PATH_LIST_BYTES / 4)}${i}.ts`);
         mockGetTrackedFiles.mockResolvedValue(['src/near.ts', ...many]);
         const c = client({ paths: [], skipped: false });
         await runScout(c, { patch: LARGE, providedPaths: ['src/changed.ts'] }, '/repo', budget);
         const sent = c.scoutAgentContext.mock.calls[0][0].repositoryPaths as string[];
         expect(sent[0]).toBe('src/near.ts');
-        expect(sent.reduce((n, p) => n + p.length + 1, 0)).toBeLessThanOrEqual(AGENT_SCOUT_MAX_PATH_LIST_CHARS);
+        expect(sent.reduce((n, p) => n + Buffer.byteLength(p) + 1, 0)).toBeLessThanOrEqual(AGENT_SCOUT_MAX_PATH_LIST_BYTES);
         expect(sent.length).toBeLessThan(6);
     });
 
@@ -185,17 +191,24 @@ describe('runScout', () => {
         expect(out).toEqual({ files: [], reviewTicket: 't-2', meta: { durationMs: expect.any(Number), files: [], skipped: false }, warnings: [] });
     });
 
-    it('keeps the ticket and the backend reason when the scout skipped', async () => {
+    it('keeps the ticket and reports a too-large change when the scout skipped', async () => {
         const c = client({ paths: [], skipped: true, reason: 'input_too_large', reviewTicket: 't-3' });
         const out = await runScout(c, { patch: LARGE, providedPaths: [] }, '/repo', budget);
-        expect(out).toEqual({ files: [], reviewTicket: 't-3', meta: { durationMs: expect.any(Number), files: [], skipped: true, reason: 'input_too_large' }, warnings: [] });
+        expect(out).toEqual({ files: [], reviewTicket: 't-3', meta: { durationMs: expect.any(Number), files: [], skipped: true, reason: 'too_large' }, warnings: [] });
     });
 
-    it('leaves out a skip reason it does not know', async () => {
-        const c = client({ paths: [], skipped: true, reason: '\u001b[31minjected' });
-        const out = await runScout(c, { patch: LARGE, providedPaths: [] }, '/repo', budget);
-        expect(out.meta).toEqual({ durationMs: expect.any(Number), files: [], skipped: true });
+    it('keeps a timeout the service reports', async () => {
+        const out = await runScout(client({ paths: [], skipped: true, reason: 'timeout' }), { patch: LARGE, providedPaths: [] }, '/repo', budget);
+        expect(out.meta.reason).toBe('timeout');
     });
+
+    it.each(['some_other_reason', '\u001b[31minjected', undefined])(
+        'reports any other skip reason (%s) as unavailable',
+        async (reason) => {
+            const out = await runScout(client({ paths: [], skipped: true, reason }), { patch: LARGE, providedPaths: [] }, '/repo', budget);
+            expect(out.meta).toEqual({ durationMs: expect.any(Number), files: [], skipped: true, reason: 'unavailable' });
+        },
+    );
 
     it('ignores an empty ticket', async () => {
         const c = client({ paths: [], skipped: false, reviewTicket: '' });
@@ -206,7 +219,7 @@ describe('runScout', () => {
     it('treats a 404 from an older backend as no files', async () => {
         const c = client(null);
         const out = await runScout(c, { patch: LARGE, providedPaths: [] }, '/repo', budget);
-        expect(out).toEqual({ files: [], meta: { durationMs: expect.any(Number), files: [], skipped: true }, warnings: [] });
+        expect(out).toEqual({ files: [], meta: { durationMs: expect.any(Number), files: [], skipped: true, reason: 'unavailable' }, warnings: [] });
     });
 
     it('treats an answer without a paths list as no files', async () => {
@@ -222,10 +235,10 @@ describe('runScout', () => {
         expect(out.meta).toEqual({ durationMs: expect.any(Number), files: [], skipped: true, reason: 'timeout' });
     });
 
-    it('treats any other error, such as a 429, as no files without a reason', async () => {
+    it('treats any other error, such as a 429, as no files and reports unavailable', async () => {
         const c = { scoutAgentContext: vi.fn().mockRejectedValue(Object.assign(new Error('limit'), { status: 429 })) };
         const out = await runScout(c, { patch: LARGE, providedPaths: [] }, '/repo', budget);
-        expect(out.meta).toEqual({ durationMs: expect.any(Number), files: [], skipped: true });
+        expect(out.meta).toEqual({ durationMs: expect.any(Number), files: [], skipped: true, reason: 'unavailable' });
     });
 
     it('does not call the backend when git cannot list the tracked files', async () => {

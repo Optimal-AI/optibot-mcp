@@ -107,11 +107,14 @@ export interface AgentScoutedFile {
     content: string;
 }
 
-/** The backend's skip reasons for POST /api/review/agent/context. */
-export const AGENT_SCOUT_BACKEND_SKIP_REASONS = ['timeout', 'input_too_large'] as const;
+/**
+ * Why the context step did not run: the change was below the threshold, the
+ * step ran out of time, the change was too large for it, or it was not
+ * available for any other reason.
+ */
+export const AGENT_SCOUT_SKIP_REASONS = ['small_change', 'timeout', 'too_large', 'unavailable'] as const;
 
-/** Why the scout did not run or picked nothing: 'small_change' is the MCP's own reason, the rest are the backend's. */
-export type AgentScoutSkipReason = 'small_change' | typeof AGENT_SCOUT_BACKEND_SKIP_REASONS[number];
+export type AgentScoutSkipReason = typeof AGENT_SCOUT_SKIP_REASONS[number];
 
 /** What the scout step did, reported in the review's structured output. */
 export interface AgentScoutMeta {
