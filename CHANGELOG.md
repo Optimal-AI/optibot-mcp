@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.7.0] - 2026-10-16
+
 ### Added
 
 - `review_agent` runs a context step before reviewing a change of 200 or more changed lines. The step asks Optibot which other files in the repository the review will need, reads them from the working copy, and sends them with the review, so the reviewer rarely reports missing context. The step and the review count as one review. The tool names the files before it reads them and reports what the step did in `meta.scout`. It reads only files git tracks, and it skips files git ignores, files inside `.git`, binary files, files with credential-like names, and files whose content looks like a key or token. Pass `scout: false` to turn the step off. A backend without the step reviews as before.
@@ -22,7 +24,7 @@
 
 ### Fixed
 
-- `review_agent` and `review_local_changes` review new files that git does not ignore as part of the change. Before, a new file reached the reviewer only as context, and a change made only of new files returned "No changes to review."
+- `review_agent` and `review_local_changes` review new files that git does not ignore as part of the change. Before, a new file reached the reviewer only as context, and a change made only of new files returned "No changes to review." A new file whose content contains a private key or an API token is not sent.
 - `get_security_scan` on an unknown scan id suggests `list_security_scans`.
 - Tool descriptions describe what each tool does rather than how the service works.
 - Review progress notifications strip control characters from the tool name and file path or search pattern they show.
