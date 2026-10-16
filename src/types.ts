@@ -78,6 +78,53 @@ export interface AgentReviewResponse {
     meta?: { mode: 'agent'; durationMs: number };
 }
 
+/** Input to ApiClient.scoutAgentContext; the client base64-encodes the patch. */
+export interface AgentContextRequest {
+    /** Plain text; the client base64-encodes it. */
+    patch: string;
+    /** Files the review already sends: the changed files and the related files. */
+    providedPaths: string[];
+    /** Every tracked file in the repository (`git ls-files`). */
+    repositoryPaths: string[];
+    repositoryName?: string;
+}
+
+/** The backend's answer from POST /api/review/agent/context. */
+export interface AgentContextResult {
+    /** rank 1 is the file the reviewer most likely needs. */
+    paths: Array<{ path: string; rank: number }>;
+    skipped: boolean;
+    reason?: string;
+    meta?: { durationMs: number };
+    /** Sent with the review that follows, so the scout and the review count as one review. */
+    reviewTicket?: string;
+    reviewCount?: ReviewStatus;
+}
+
+/** A file the scout chose, with its plain-text content. */
+export interface AgentScoutedFile {
+    path: string;
+    content: string;
+}
+
+/**
+ * Why the context step did not run: the change was below the threshold, the
+ * step ran out of time, the change was too large for it, or it was not
+ * available for any other reason.
+ */
+export const AGENT_SCOUT_SKIP_REASONS = ['small_change', 'timeout', 'too_large', 'unavailable'] as const;
+
+export type AgentScoutSkipReason = typeof AGENT_SCOUT_SKIP_REASONS[number];
+
+/** What the scout step did, reported in the review's structured output. */
+export interface AgentScoutMeta {
+    durationMs: number;
+    /** The scouted files sent with the review. */
+    files: string[];
+    skipped: boolean;
+    reason?: AgentScoutSkipReason;
+}
+
 /**
  * Outcome of submitting an agent review with `async: true`. A backend with the
  * async path answers 202 with a reviewId to poll ('accepted'); one without it
@@ -116,6 +163,10 @@ export interface AgentReviewRequest {
     relatedFiles?: Record<string, string>;
     /** Plain-text (NOT base64) output of a local tsc/eslint/LSP run. */
     localDiagnostics?: string;
+    /** Files the context scout chose, in rank order; the client base64-encodes the content. */
+    scoutedFiles?: AgentScoutedFile[];
+    /** Ticket from the scout, so the scout and this review count as one review. */
+    reviewTicket?: string;
 }
 
 export interface ParsedFileComment {
@@ -332,4 +383,10 @@ export interface SecurityScanProgressEvent {
     step: SecurityScanProgressStep;
     message: string;
     details?: SecurityScanProgressDetails;
+}
+
+/** Per-call options for mapScanError (src/lib/scanErrors.ts). */
+export interface ScanErrorOptions {
+    /** Replaces the default 404 hint, which points at `list_scannable_repos`. */
+    readonly notFoundHint?: string;
 }

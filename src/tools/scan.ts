@@ -124,14 +124,14 @@ function isErrorResult(x: unknown): x is ErrorToolResult {
     return typeof x === 'object' && x !== null && (x as { isError?: unknown }).isError === true;
 }
 
-function formatProgressStep(event: SecurityScanProgressEvent): string {
+export function formatScanProgressStep(event: SecurityScanProgressEvent): string {
     const prefix = '[scan]';
     const d = event.details;
     switch (event.step) {
         case 'started':
             return `${prefix} ${d?.repoName ? `Scanning ${sanitizeServerText(d.repoName)}` : 'Scan started'}`;
         case 'cloning_repository':
-            return `${prefix} Cloning repository${d?.repoName ? ` ${sanitizeServerText(d.repoName)}` : ''}`;
+            return `${prefix} Preparing repository${d?.repoName ? ` ${sanitizeServerText(d.repoName)}` : ''}`;
         case 'scanning_code':
             return `${prefix} Scanning code`;
         case 'tool_call':
@@ -260,7 +260,7 @@ export function registerScanTools(server: McpServer): void {
 
             const progressService = new SecurityScanProgressService();
             const sessionId = await progressService.startSession((event) => {
-                safeSendLog(extra, 'optibot', formatProgressStep(event));
+                safeSendLog(extra, 'optibot', formatScanProgressStep(event));
             });
 
             try {
@@ -381,7 +381,7 @@ export function registerScanTools(server: McpServer): void {
 
     // Tool: get_security_scan
     tool(server, 'get_security_scan',
-        'Fetch the full markdown report and metadata for a specific security scan by id. The backend has no by-id endpoint, so this pages through recent scans up to a reasonable cap.',
+        'Fetch the full markdown report and metadata for a specific security scan by id. Looks up the organization\'s recent scans.',
         GetScanSchema,
         async (input) => {
             const ctx = await getAuthedContext();
@@ -401,7 +401,7 @@ export function registerScanTools(server: McpServer): void {
                     return errorResult(mapScanError(Object.assign(new Error('Not found'), {
                         status: 404,
                         data: { error: `Scan ${input.scanId} not found in the ${maxPages * pageSize} most recent scans.` },
-                    })));
+                    }), { notFoundHint: 'Call `list_security_scans` to see recent scans and their ids.' }));
                 }
 
                 const summary = summarizeScanResult(match);

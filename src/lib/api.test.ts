@@ -328,6 +328,89 @@ describe('ApiClient', () => {
         });
     });
 
+    describe('submitAgentReview scout fields', () => {
+        it('sends scoutedFiles in rank order with base64 content, and the ticket', async () => {
+            mockOkResponse({});
+            await client.submitAgentReview({
+                patch: 'x',
+                scoutedFiles: [{ path: 'b.ts', content: 'second' }, { path: 'a.ts', content: 'first' }],
+                reviewTicket: 'ticket-1',
+            });
+
+            const callBody = JSON.parse(fetchMock.mock.calls[0][1].body);
+            expect(callBody.scoutedFiles).toEqual([
+                { path: 'b.ts', content: Buffer.from('second').toString('base64') },
+                { path: 'a.ts', content: Buffer.from('first').toString('base64') },
+            ]);
+            expect(callBody.reviewTicket).toBe('ticket-1');
+        });
+
+        it('omits scoutedFiles when empty and the ticket when absent', async () => {
+            mockOkResponse({});
+            await client.submitAgentReview({ patch: 'x', scoutedFiles: [] });
+
+            const callBody = JSON.parse(fetchMock.mock.calls[0][1].body);
+            expect(callBody.scoutedFiles).toBeUndefined();
+            expect(callBody.reviewTicket).toBeUndefined();
+        });
+
+        it('sends the ticket without scouted files', async () => {
+            mockOkResponse({});
+            await client.submitAgentReview({ patch: 'x', reviewTicket: 'ticket-2' });
+
+            const callBody = JSON.parse(fetchMock.mock.calls[0][1].body);
+            expect(callBody.scoutedFiles).toBeUndefined();
+            expect(callBody.reviewTicket).toBe('ticket-2');
+        });
+    });
+
+    describe('scoutAgentContext', () => {
+        const params = { patch: 'the diff', providedPaths: ['a.ts'], repositoryPaths: ['a.ts', 'b.ts'], repositoryName: 'my-repo' };
+
+        it('POSTs the context endpoint with a base64 patch and a timeout signal', async () => {
+            mockOkResponse({ paths: [], skipped: false });
+            await client.scoutAgentContext(params);
+
+            const [url, init] = fetchMock.mock.calls[0];
+            expect(url).toBe('http://test-api.local/api/review/agent/context');
+            expect(init.method).toBe('POST');
+            expect(init.headers).toEqual(expect.objectContaining({
+                'Content-Type': 'application/json',
+                'Authorization': 'Bearer test-api-key',
+            }));
+            expect(init.signal).toBeInstanceOf(AbortSignal);
+            expect(JSON.parse(init.body)).toEqual({
+                patch: Buffer.from('the diff').toString('base64'),
+                providedPaths: ['a.ts'],
+                repositoryPaths: ['a.ts', 'b.ts'],
+                repositoryName: 'my-repo',
+            });
+        });
+
+        it('omits repositoryName when not provided', async () => {
+            mockOkResponse({ paths: [], skipped: false });
+            await client.scoutAgentContext({ ...params, repositoryName: undefined });
+
+            expect(JSON.parse(fetchMock.mock.calls[0][1].body).repositoryName).toBeUndefined();
+        });
+
+        it('returns the answer as sent', async () => {
+            const answer = { paths: [{ path: 'b.ts', rank: 1 }], skipped: false, reviewTicket: 't' };
+            mockOkResponse(answer);
+            await expect(client.scoutAgentContext(params)).resolves.toEqual(answer);
+        });
+
+        it('returns null on a 404 from a backend without the endpoint', async () => {
+            fetchMock.mockResolvedValue({ ok: false, status: 404, statusText: 'Not Found', json: () => Promise.resolve({}) });
+            await expect(client.scoutAgentContext(params)).resolves.toBeNull();
+        });
+
+        it('throws with the status on any other error', async () => {
+            mockErrorResponse(429, { error: 'Daily limit reached' });
+            await expect(client.scoutAgentContext(params)).rejects.toMatchObject({ message: 'Daily limit reached', status: 429 });
+        });
+    });
+
     describe('getAgentReviewResult', () => {
         it('GETs the result endpoint with the id encoded', async () => {
             fetchMock.mockResolvedValue({ ok: true, status: 200, json: () => Promise.resolve({ status: 'pending' }) });
@@ -375,10 +458,10 @@ describe('ApiClient', () => {
         it('reports the backend error field, not just message', async () => {
             // Every agent-mode error body uses `error`; reading only `message`
             // dropped the actionable text.
-            mockErrorResponse(413, { error: 'The diff is too large for the review model.' });
+            mockErrorResponse(413, { error: 'The diff is too large to review.' });
 
             await expect(client.getAgentReviewResult('apirev_1')).rejects.toThrow(
-                'The diff is too large for the review model.',
+                'The diff is too large to review.',
             );
         });
     });

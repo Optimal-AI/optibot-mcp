@@ -166,6 +166,40 @@ describe('status tool', () => {
         expect(text).not.toContain('Review Quota'); // quota section skipped
     });
 
+    it.each([
+        ['organizations', 'orgs'],
+        ['review quota', 'quota'],
+    ])('reports a rejected key when the %s call answers 401, instead of a partial status', async (_label, which) => {
+        delete process.env.OPTIBOT_API_KEY;
+        mockReadConfig.mockResolvedValue({ apiKey: 'k' });
+        const rejected = Object.assign(new Error('Unauthorized'), { status: 401 });
+        if (which === 'orgs') {
+            mockListOrganizations.mockRejectedValue(rejected);
+            mockGetReviewStatus.mockResolvedValue({});
+        } else {
+            mockListOrganizations.mockResolvedValue({ organizations: [], currentOrganizationId: 1 });
+            mockGetReviewStatus.mockRejectedValue(rejected);
+        }
+
+        const result = await registered.get('get_status')!({});
+
+        expect(result.isError).toBe(true);
+        expect(result.content[0].text).toContain('formatted: Unauthorized');
+    });
+
+    it('still shows a partial status when a call answers 403, since a valid key can be refused by one endpoint', async () => {
+        delete process.env.OPTIBOT_API_KEY;
+        mockReadConfig.mockResolvedValue({ apiKey: 'k' });
+        mockListOrganizations.mockResolvedValue({ organizations: [{ id: 1, name: 'Acme' }], currentOrganizationId: 1 });
+        mockGetReviewStatus.mockRejectedValue(Object.assign(new Error('Forbidden'), { status: 403 }));
+        mockGetOrgIdFromToken.mockReturnValue(1);
+
+        const result = await registered.get('get_status')!({});
+
+        expect(result.isError).toBeUndefined();
+        expect(result.content[0].text).toContain('Active: Acme');
+    });
+
     it('returns a formatted error when not authenticated', async () => {
         delete process.env.OPTIBOT_API_KEY;
         mockReadConfig.mockRejectedValue(new Error('Not authenticated'));

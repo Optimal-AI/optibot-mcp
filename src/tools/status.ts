@@ -24,6 +24,18 @@ export function registerStatusTool(server: McpServer): void {
                     client.getReviewStatus(),
                 ]);
 
+                // A 401 means the service rejected the key itself, so the answer
+                // is "not authenticated", not a partial status. A 403, or any
+                // other failure, stays non-fatal: a valid key can be refused by
+                // one endpoint.
+                const rejected = [orgsResult, reviewStatusResult].find(
+                    (r): r is PromiseRejectedResult => r.status === 'rejected'
+                        && (r.reason as { status?: unknown })?.status === 401,
+                );
+                if (rejected) {
+                    return { content: [{ type: 'text' as const, text: formatError(rejected.reason) }], isError: true };
+                }
+
                 const lines: string[] = ['## Authentication', ''];
                 lines.push(`Method: ${source}`);
                 const prefix = config.apiKey.substring(0, Math.min(8, config.apiKey.length));

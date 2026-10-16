@@ -33,3 +33,11 @@ CLAUDE.md
 CLAUDE.local.md
 .claude/
 /.smoke-prod.mjs
+
+# Local scratch work: worktrees, smoke scripts, and scratch folders
+.worktrees/
+.superpowers/
+/.smoke-*
+scratchpad/
+temp_scratchpad/
+docs/superpowers/

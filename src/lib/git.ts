@@ -3,6 +3,7 @@ import { promisify } from 'util';
 import * as path from 'path';
 import * as fs from 'fs/promises';
 import { GitChangedFile } from '../types.js';
+import { findSecretInContent } from './contextSafety.js';
 
 const execFile = promisify(execFileCb);
 
@@ -27,11 +28,46 @@ const SENSITIVE_FILENAME_PATTERNS: RegExp[] = [
     /\.pypirc$/i,              // PyPI credentials
     /\.netrc$/i,               // Generic credentials
     /authinfo(\.gpg)?$/i,      // Emacs auth info
+    /^\.envrc$/i,              // direnv environment files
+    /\.tfvars(\.json)?$/i,     // Terraform variable files
 ];
 
 export function isSensitiveFile(relativePath: string): boolean {
-    const basename = path.basename(relativePath);
-    return SENSITIVE_FILENAME_PATTERNS.some(pattern => pattern.test(basename));
+    // Match the name Windows actually opens: it ignores an NTFS stream suffix
+    // (".env::$DATA") and trailing dots and spaces (".env ", ".env.").
+    // A colon is an ordinary character on macOS and Linux, so the full name
+    // is checked too: "prod:db.pem" is sensitive there, not "prod".
+    const name = path.basename(relativePath);
+    const candidates = [name, name.split(':', 1)[0]].map(n => n.replace(/[. ]+$/u, ''));
+    return candidates.some(basename => SENSITIVE_FILENAME_PATTERNS.some(pattern => pattern.test(basename)));
+}
+
+/**
+ * Whether git ignores any of `paths` in the repository at `repoRoot`. A path may
+ * be relative to the repository (as requested) or absolute (as resolved).
+ * Local configuration and secrets are normally ignored, and a reviewer never
+ * needs one to judge a change. 'unknown' means git could not answer; callers
+ * treat it as a refusal.
+ */
+export async function gitIgnoreStatus(
+    repoRoot: string,
+    paths: string[],
+): Promise<'ignored' | 'not-ignored' | 'unknown'> {
+    let realRepoRoot: string;
+    try {
+        realRepoRoot = await fs.realpath(repoRoot);
+    } catch {
+        realRepoRoot = path.resolve(repoRoot);
+    }
+    const relative = paths.map(p => (path.isAbsolute(p) ? path.relative(realRepoRoot, p) : p));
+    try {
+        // No -q: git accepts it with a single path only. `--` so a path that
+        // starts with "-" is never read as an option.
+        await execFile('git', ['check-ignore', '--', ...relative], { cwd: realRepoRoot });
+        return 'ignored'; // exit 0: at least one path is ignored
+    } catch (err: unknown) {
+        return (err as { code?: unknown })?.code === 1 ? 'not-ignored' : 'unknown';
+    }
 }
 
 /**
@@ -139,12 +175,142 @@ export async function getRepoName(): Promise<string> {
     return path.basename(root);
 }
 
+/**
+ * The uncommitted changes against HEAD, with each untracked file that git does
+ * not ignore added as a new file. `git diff HEAD` leaves untracked files out,
+ * so without them a new file reached the reviewer only as context, and a
+ * change made only of new files read as no change at all.
+ */
 export async function getDiffHead(repoRoot: string): Promise<string> {
-    const { stdout } = await execFile('git', ['diff', 'HEAD'], {
+    // A staged new file is as new as an untracked one, so one whose content
+    // holds a credential is excluded from the diff the same way.
+    const excluded = await stagedNewFilesWithSecrets(repoRoot);
+    const pathspec = excluded.length > 0
+        ? ['--', '.', ...excluded.map((p) => `:(exclude,literal)${p}`)]
+        : [];
+    const { stdout } = await execFile('git', ['diff', 'HEAD', ...pathspec], {
         cwd: repoRoot,
         maxBuffer: 50 * 1024 * 1024,
     });
-    return stdout;
+    return stdout + await getUntrackedDiff(repoRoot);
+}
+
+/** The staged new files whose working-copy content holds a credential. */
+async function stagedNewFilesWithSecrets(repoRoot: string): Promise<string[]> {
+    const { stdout } = await execFile('git', ['diff', '--cached', '--name-only', '-z', '--diff-filter=A', 'HEAD'], {
+        cwd: repoRoot,
+        maxBuffer: 50 * 1024 * 1024,
+    });
+    const added = stdout.split('\0').filter((p) => p.length > 0);
+    const flagged = await mapWithConcurrency(added, UNTRACKED_DIFF_CONCURRENCY, async (relativePath) => {
+        try {
+            const content = await fs.readFile(path.join(repoRoot, relativePath), 'utf-8');
+            return newFileSecretKind(relativePath, content) ? relativePath : null;
+        } catch {
+            return null;
+        }
+    });
+    return flagged.filter((p): p is string => p !== null);
+}
+
+/** The largest untracked file added to the patch. A bigger one still goes with the review as file content. */
+export const UNTRACKED_DIFF_MAX_FILE_BYTES = 1_000_000;
+/** The most untracked-file bytes added to the patch in total, so the request stays well under the upload limit. */
+export const UNTRACKED_DIFF_MAX_TOTAL_BYTES = 10_000_000;
+/** The most untracked files added to the patch, which bounds the time spent diffing them. */
+export const UNTRACKED_DIFF_MAX_FILES = 1_000;
+/** How many untracked files are screened or diffed at once. */
+const UNTRACKED_DIFF_CONCURRENCY = 8;
+
+/**
+ * The kind of credential in a new file's content, logged when found. A file
+ * new in this change is often local notes or a scratch config, so one that
+ * holds a key or token is kept out of the review entirely.
+ */
+function newFileSecretKind(relativePath: string, content: string): string | null {
+    const kind = findSecretInContent(content);
+    if (kind) console.error(`[security] Skipping new file that contains what looks like a ${kind}: ${relativePath}`);
+    return kind;
+}
+
+/** Runs `task` over `items` with at most `limit` in flight, keeping results in input order. */
+async function mapWithConcurrency<T, R>(items: T[], limit: number, task: (item: T) => Promise<R>): Promise<R[]> {
+    const results = new Array<R>(items.length);
+    let next = 0;
+    const worker = async () => {
+        while (next < items.length) {
+            const index = next++;
+            results[index] = await task(items[index]);
+        }
+    };
+    await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+    return results;
+}
+
+/**
+ * Each untracked, non-ignored file as an added-file diff. Every path passes
+ * screenReadablePath first, so a file getFileContents would refuse, such as a
+ * credential file or a link out of the repository, stays out of the patch too,
+ * and so does a file whose content holds a credential.
+ * Files are taken in git's order until one of the UNTRACKED_DIFF_* limits is
+ * reached; each file left out is logged and still goes with the review as file
+ * content. `git diff --no-index` compares against /dev/null without touching
+ * the index.
+ */
+async function getUntrackedDiff(repoRoot: string): Promise<string> {
+    const { stdout } = await execFile('git', ['ls-files', '-z', '--others', '--exclude-standard'], {
+        cwd: repoRoot,
+        maxBuffer: 50 * 1024 * 1024,
+    });
+    const untracked = stdout.split('\0').filter((p) => p.length > 0);
+
+    const screenedFiles = await mapWithConcurrency(untracked, UNTRACKED_DIFF_CONCURRENCY, async (relativePath) => {
+        const screened = await screenReadablePath(relativePath, repoRoot);
+        if (!screened.ok) return null;
+        try {
+            return { relativePath, absolutePath: screened.absolutePath, size: (await fs.stat(screened.absolutePath)).size };
+        } catch {
+            return null;
+        }
+    });
+
+    const selected: Array<{ relativePath: string; absolutePath: string }> = [];
+    let total = 0;
+    screenedFiles.forEach((file) => {
+        if (file === null) return;
+        const { relativePath, size } = file;
+        if (size > UNTRACKED_DIFF_MAX_FILE_BYTES
+            || total + size > UNTRACKED_DIFF_MAX_TOTAL_BYTES
+            || selected.length >= UNTRACKED_DIFF_MAX_FILES) {
+            console.error(`[review] New file left out of the diff (size or count limit), sent as file content only: ${relativePath}`);
+            return;
+        }
+        selected.push(file);
+        total += size;
+    });
+
+    // Content is read only for the files within the limits, so a working copy
+    // with many new files costs at most UNTRACKED_DIFF_MAX_TOTAL_BYTES of reads.
+    const diffs = await mapWithConcurrency(selected, UNTRACKED_DIFF_CONCURRENCY, async ({ relativePath, absolutePath }) => {
+        try {
+            if (newFileSecretKind(relativePath, await fs.readFile(absolutePath, 'utf-8'))) return '';
+        } catch {
+            return '';
+        }
+        try {
+            await execFile('git', ['diff', '--no-index', '--', '/dev/null', relativePath], {
+                cwd: repoRoot,
+                maxBuffer: 50 * 1024 * 1024,
+            });
+            return '';
+        } catch (err: unknown) {
+            // Exit 1 means the files differ, which a new file always does, and
+            // stdout holds the diff. Any other failure leaves the file out.
+            const { code, stdout: diff } = err as { code?: unknown; stdout?: unknown };
+            return code === 1 && typeof diff === 'string' ? diff : '';
+        }
+    });
+    return diffs.join('');
 }
 
 export async function getDiffBranch(targetBranch: string, repoRoot: string): Promise<string> {
@@ -249,6 +415,12 @@ export async function getFileContents(
 ): Promise<Record<string, string>> {
     const contents: Record<string, string> = {};
     let truncated = 0;
+    let realRoot: string;
+    try {
+        realRoot = await fs.realpath(repoRoot);
+    } catch {
+        realRoot = path.resolve(repoRoot);
+    }
 
     for (const file of changedFiles) {
         if (file.status === 'D') continue;
@@ -266,6 +438,15 @@ export async function getFileContents(
         }
         const absolutePath = screened.absolutePath;
 
+        // A changed file that is a link may point at a file git ignores, such
+        // as local configuration, which the review must not send under the
+        // link's name. Checked only for links, so ordinary files cost no git call.
+        if (absolutePath !== path.resolve(realRoot, file.relativePath)
+            && await gitIgnoreStatus(repoRoot, [file.relativePath, absolutePath]) !== 'not-ignored') {
+            console.error(`[security] Skipping changed file that links to an ignored file: ${file.relativePath}`);
+            continue;
+        }
+
         try {
             // Size from the directory entry first, like the related-file path:
             // a changed file that cannot fit the budget should not be opened at
@@ -282,6 +463,7 @@ export async function getFileContents(
             if (await isBinaryFile(absolutePath)) continue;
 
             const content = await fs.readFile(absolutePath, 'utf-8');
+            if ((file.status === '?' || file.status === 'A') && newFileSecretKind(file.relativePath, content)) continue;
             const size = Buffer.byteLength(content, 'utf-8');
             if (!budget.canFit(size)) {
                 truncated += 1;
@@ -375,7 +557,7 @@ function isInsideRoot(root: string, target: string): boolean {
  */
 export type PathScreening =
     | { ok: true; absolutePath: string }
-    | { ok: false; reason: 'outside' | 'sensitive' | 'binary' };
+    | { ok: false; reason: 'outside' | 'git-dir' | 'sensitive' | 'binary' };
 
 export async function screenReadablePath(
     requestedPath: string,
@@ -383,6 +565,13 @@ export async function screenReadablePath(
 ): Promise<PathScreening> {
     const absolutePath = await resolveRelatedPath(requestedPath, repoRoot);
     if (!absolutePath) return { ok: false, reason: 'outside' };
+
+    // Git's own directory is inside the repository but never part of it, and
+    // its config can hold remote URLs with credentials. A symlink can point
+    // there under a harmless name, so the resolved path is checked too.
+    if (await isInsideGitDir(requestedPath, absolutePath, repoRoot)) {
+        return { ok: false, reason: 'git-dir' };
+    }
 
     // Both names, always: a symlink called `notes.md` pointing at `.env` is
     // inside the repository, so containment passes and only the resolved name
@@ -417,12 +606,24 @@ export async function getRelatedFileContents(
                 warnings.push(`Skipped potentially sensitive related file: ${relativePath}`);
             } else if (screened.reason === 'binary') {
                 warnings.push(`Skipped binary related file: ${relativePath}`);
+            } else if (screened.reason === 'git-dir') {
+                warnings.push(`Skipped related file: it is inside the .git directory: ${relativePath}`);
             } else {
                 warnings.push(`Skipped related file: not a readable file inside the repository: ${relativePath}`);
             }
             continue;
         }
         const absolutePath = screened.absolutePath;
+
+        // Both the requested path and the file it resolves to, so a symlink
+        // cannot move an ignored file past the check. A git failure refuses.
+        const ignore = await gitIgnoreStatus(repoRoot, [relativePath, absolutePath]);
+        if (ignore !== 'not-ignored') {
+            warnings.push(ignore === 'ignored'
+                ? `Skipped related file ignored by git: ${relativePath}`
+                : `Skipped related file (git could not check whether it is ignored): ${relativePath}`);
+            continue;
+        }
 
         // Size first, from the directory entry: a file that cannot fit the
         // budget should never be pulled into memory just to be discarded.
@@ -454,6 +655,12 @@ export async function getRelatedFileContents(
             continue;
         }
 
+        const secretKind = findSecretInContent(content);
+        if (secretKind) {
+            warnings.push(`Skipped related file that contains what looks like a ${secretKind}: ${relativePath}`);
+            continue;
+        }
+
         const size = Buffer.byteLength(content, 'utf-8');
         if (!budget.canFit(size)) {
             warnings.push(`Skipped related file (upload budget exceeded): ${relativePath}`);
@@ -465,6 +672,102 @@ export async function getRelatedFileContents(
     }
 
     return { contents, warnings };
+}
+
+/** Every tracked path in the repository, as `git ls-files -z` prints it. */
+export async function getTrackedFiles(repoRoot: string): Promise<string[]> {
+    const { stdout } = await execFile('git', ['ls-files', '-z'], {
+        cwd: repoRoot,
+        maxBuffer: 256 * 1024 * 1024,
+    });
+    return stdout.split('\0').filter((p) => p.length > 0);
+}
+
+/** True when the requested path or the file it resolves to has a `.git` path component. */
+async function isInsideGitDir(requestedPath: string, absolutePath: string, repoRoot: string): Promise<boolean> {
+    let realRoot: string;
+    try {
+        realRoot = await fs.realpath(repoRoot);
+    } catch {
+        realRoot = path.resolve(repoRoot);
+    }
+    const hasGitPart = (p: string) => p.split(/[\\/]+/).some((part) => part.toLowerCase() === '.git');
+    return hasGitPart(requestedPath) || hasGitPart(path.relative(realRoot, absolutePath));
+}
+
+export type ScoutedFileRead =
+    | { ok: true; content: string }
+    | { ok: false; warning: string };
+
+/**
+ * Reads one file the context scout named. The path comes from the server, so
+ * it passes every check the related-file reader applies (containment, a
+ * sensitive name, a binary file, the shared upload budget) plus two more: the
+ * file must not be ignored by git, and its content must not hold a credential.
+ */
+export async function readScoutedFile(
+    requestedPath: string,
+    repoRoot: string,
+    budget: UploadBudget,
+): Promise<ScoutedFileRead> {
+    const screened = await screenReadablePath(requestedPath, repoRoot);
+    if (!screened.ok) {
+        if (screened.reason === 'sensitive') {
+            console.error(`[security] Skipping potentially sensitive scouted file: ${requestedPath}`);
+            return { ok: false, warning: `Skipped potentially sensitive scouted file: ${requestedPath}` };
+        }
+        if (screened.reason === 'binary') {
+            return { ok: false, warning: `Skipped binary scouted file: ${requestedPath}` };
+        }
+        if (screened.reason === 'git-dir') {
+            return { ok: false, warning: `Skipped scouted file: it is inside the .git directory: ${requestedPath}` };
+        }
+        return { ok: false, warning: `Skipped scouted file: not a readable file inside the repository: ${requestedPath}` };
+    }
+    const absolutePath = screened.absolutePath;
+
+    // Both names, so an ignored link cannot pass under a tracked name.
+    const ignored = await gitIgnoreStatus(repoRoot, [requestedPath, absolutePath]);
+    if (ignored === 'ignored') {
+        return { ok: false, warning: `Skipped scouted file: it is ignored by git: ${requestedPath}` };
+    }
+    if (ignored === 'unknown') {
+        return { ok: false, warning: `Skipped scouted file: git could not check whether it is ignored: ${requestedPath}` };
+    }
+
+    // Size and binary content are checked before the read, so a large file or a
+    // binary under a text-looking name is never pulled into memory.
+    try {
+        const stat = await fs.stat(absolutePath);
+        if (!budget.canFit(stat.size)) {
+            return { ok: false, warning: `Skipped scouted file (upload budget exceeded): ${requestedPath}` };
+        }
+    } catch {
+        return { ok: false, warning: `Could not read scouted file: ${requestedPath}` };
+    }
+    if (await isBinaryFile(absolutePath)) {
+        return { ok: false, warning: `Skipped binary scouted file: ${requestedPath}` };
+    }
+
+    let content: string;
+    try {
+        content = await fs.readFile(absolutePath, 'utf-8');
+    } catch {
+        return { ok: false, warning: `Could not read scouted file: ${requestedPath}` };
+    }
+
+    const secretKind = findSecretInContent(content);
+    if (secretKind) {
+        console.error(`[security] Skipping a scouted file that holds what looks like a ${secretKind}: ${requestedPath}`);
+        return { ok: false, warning: `Skipped scouted file: it holds what looks like a ${secretKind}: ${requestedPath}` };
+    }
+
+    const size = Buffer.byteLength(content, 'utf-8');
+    if (!budget.canFit(size)) {
+        return { ok: false, warning: `Skipped scouted file (upload budget exceeded): ${requestedPath}` };
+    }
+    budget.spend(size);
+    return { ok: true, content };
 }
 
 /**
@@ -489,6 +792,9 @@ export async function readDiagnosticsFile(
         }
         if (screened.reason === 'binary') {
             throw new Error(`Diagnostics file looks binary, expected text output: ${filePath}`);
+        }
+        if (screened.reason === 'git-dir') {
+            throw new Error(`Diagnostics file must not be inside the .git directory: ${filePath}`);
         }
         throw new Error(`Diagnostics file must be a readable file within the repository. Got: ${filePath}`);
     }

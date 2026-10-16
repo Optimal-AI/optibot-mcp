@@ -29,6 +29,8 @@ import {
     createUploadBudget,
     screenReadablePath,
     looksBinary,
+    isSensitiveFile,
+    gitIgnoreStatus,
 } from './git.js';
 
 const execMock = vi.mocked(exec);
@@ -54,6 +56,19 @@ function mockExecFile(stdout: string, stderr = '') {
     ) => {
         const callback = typeof _opts === 'function' ? _opts : cb;
         callback!(null, { stdout, stderr });
+    }) as any);
+}
+
+/** Answers each execFile call by its joined arguments, and with empty output otherwise. */
+function mockExecFilePerArgs(responses: Record<string, string>) {
+    execFileMock.mockImplementation(((
+        _file: string,
+        args: string[],
+        _opts: any,
+        cb?: (err: Error | null, result: { stdout: string; stderr: string }) => void
+    ) => {
+        const callback = typeof _opts === 'function' ? _opts : cb;
+        callback!(null, { stdout: responses[args.join(' ')] ?? '', stderr: '' });
     }) as any);
 }
 
@@ -174,9 +189,9 @@ function mockExecPerCommandWithErrors(
 
 describe('getRepoRoot', () => {
     it('returns trimmed stdout from git rev-parse', async () => {
-        mockExecFile('/Users/me/project\n');
+        mockExecFile('/home/alice/project\n');
         const root = await getRepoRoot();
-        expect(root).toBe('/Users/me/project');
+        expect(root).toBe('/home/alice/project');
     });
 
     it('throws when not in a git repository', async () => {
@@ -187,12 +202,12 @@ describe('getRepoRoot', () => {
 
 describe('parseRepoNameFromRemoteUrl', () => {
     it.each([
-        ['git@github.com:Optimal-AI/optibot-be.git', 'optibot-be'],
-        ['https://github.com/Optimal-AI/optibot-be.git', 'optibot-be'],
-        ['https://github.com/Optimal-AI/optibot-be', 'optibot-be'],
-        ['https://github.com/Optimal-AI/optibot-be/\n', 'optibot-be'],
+        ['git@github.com:acme/acme-api.git', 'acme-api'],
+        ['https://github.com/acme/acme-api.git', 'acme-api'],
+        ['https://github.com/acme/acme-api', 'acme-api'],
+        ['https://github.com/acme/acme-api/\n', 'acme-api'],
         ['ssh://git@gitlab.example.com:2222/group/sub/project.git', 'project'],
-        ['/srv/mirrors/optibot-be.git', 'optibot-be'],
+        ['/srv/mirrors/acme-api.git', 'acme-api'],
     ])('%s -> %s', (url, expected) => {
         expect(parseRepoNameFromRemoteUrl(url)).toBe(expected);
     });
@@ -222,23 +237,23 @@ describe('getRepoName', () => {
 
     it('uses the origin remote, not the worktree folder', async () => {
         mockGit({
-            remote: 'git@github.com:Optimal-AI/optibot-be.git\n',
-            commonDir: '/Users/me/optibot-be/.git\n',
-            toplevel: '/Users/me/optibot-be/.claude/worktrees/modest-mahavira-5a035b\n',
+            remote: 'git@github.com:acme/acme-api.git\n',
+            commonDir: '/home/alice/acme-api/.git\n',
+            toplevel: '/home/alice/acme-api/.claude/worktrees/feature-a1b2c3\n',
         });
-        expect(await getRepoName()).toBe('optibot-be');
+        expect(await getRepoName()).toBe('acme-api');
     });
 
     it('uses the origin remote for a checkout in a renamed folder', async () => {
-        mockGit({ remote: 'https://github.com/Optimal-AI/optibot-be.git\n', toplevel: '/tmp/optibot-be__2379\n' });
-        expect(await getRepoName()).toBe('optibot-be');
+        mockGit({ remote: 'https://github.com/acme/acme-api.git\n', toplevel: '/tmp/acme-api__2379\n' });
+        expect(await getRepoName()).toBe('acme-api');
     });
 
     it('falls back to the main checkout folder when there is no origin remote', async () => {
         mockGit({
             remote: new Error("No such remote 'origin'"),
-            commonDir: '/Users/me/my-project/.git\n',
-            toplevel: '/Users/me/my-project/.claude/worktrees/some-worktree\n',
+            commonDir: '/home/alice/my-project/.git\n',
+            toplevel: '/home/alice/my-project/.claude/worktrees/some-worktree\n',
         });
         expect(await getRepoName()).toBe('my-project');
     });
@@ -249,20 +264,20 @@ describe('getRepoName', () => {
     });
 
     it('falls back to the repo root folder when git cannot report the common dir', async () => {
-        mockGit({ remote: new Error('no remote'), commonDir: new Error('unknown option'), toplevel: '/Users/me/my-project\n' });
+        mockGit({ remote: new Error('no remote'), commonDir: new Error('unknown option'), toplevel: '/home/alice/my-project\n' });
         expect(await getRepoName()).toBe('my-project');
     });
 });
 
 describe('getDiffHead', () => {
     it('returns stdout from git diff HEAD', async () => {
-        mockExecFile('diff --git a/file.ts b/file.ts\n');
+        mockExecFilePerArgs({ 'diff HEAD': 'diff --git a/file.ts b/file.ts\n' });
         const diff = await getDiffHead('/repo');
         expect(diff).toBe('diff --git a/file.ts b/file.ts\n');
     });
 
     it('calls execFile with correct cwd and maxBuffer', async () => {
-        mockExecFile('');
+        mockExecFilePerArgs({});
         await getDiffHead('/repo');
         expect(execFileMock).toHaveBeenCalledWith(
             'git',
@@ -441,6 +456,26 @@ describe('getFileContents', () => {
         expect(result['a.ts']).toBe('file content');
     });
 
+    it('skips an untracked file whose content holds a credential, but sends a modified one', async () => {
+        const mockHandle = {
+            read: vi.fn(async (buf: Buffer) => {
+                const data = Buffer.from('text');
+                data.copy(buf, 0);
+                return { bytesRead: data.length, buffer: buf };
+            }),
+            close: vi.fn().mockResolvedValue(undefined),
+        };
+        vi.mocked(fs.open).mockResolvedValue(mockHandle as any);
+        vi.mocked(fs.readFile).mockResolvedValue('-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaA\n' as never);
+
+        const result = await getFileContents(
+            [{ relativePath: 'notes.txt', status: '?' }, { relativePath: 'src/config.ts', status: 'M' }],
+            '/repo'
+        );
+        expect(result['notes.txt']).toBeUndefined();
+        expect(result['src/config.ts']).toBeDefined();
+    });
+
     it('skips deleted files', async () => {
         const result = await getFileContents(
             [{ relativePath: 'deleted.ts', status: 'D' }],
@@ -476,6 +511,22 @@ describe('getFileContents', () => {
     });
 });
 
+function mockCheckIgnoreExit(code: number) {
+    execFileMock.mockImplementation(((
+        _file: string,
+        _args: unknown,
+        opts: unknown,
+        cb?: (err: (Error & { code?: number }) | null, result?: { stdout: string; stderr: string }) => void,
+    ) => {
+        const callback = typeof opts === 'function' ? opts : cb;
+        if (code === 0) {
+            callback!(null, { stdout: '', stderr: '' });
+            return;
+        }
+        callback!(Object.assign(new Error(`exit ${code}`), { code }));
+    }) as never);
+}
+
 describe('getRelatedFileContents', () => {
     beforeEach(() => {
         vi.mocked(fs.readFile).mockReset();
@@ -486,6 +537,40 @@ describe('getRelatedFileContents', () => {
         // realpath. Default to a lexical resolution so the tests behave like
         // paths with no symlinks; the symlink test overrides this.
         vi.mocked(fs.realpath).mockImplementation((async (p: unknown) => path.resolve(String(p))) as never);
+        // git check-ignore answers "nothing ignored" (exit 1) unless a test says otherwise.
+        mockCheckIgnoreExit(1);
+    });
+
+    it('skips a related file git ignores, checking the requested and the resolved path', async () => {
+        mockCheckIgnoreExit(0);
+
+        const { contents, warnings } = await getRelatedFileContents(['config/local.yml'], '/repo');
+
+        expect(contents).toEqual({});
+        expect(warnings.join(' ')).toContain('ignored by git');
+        expect(fs.readFile).not.toHaveBeenCalled();
+        const [file, args] = execFileMock.mock.calls[0] as unknown as [string, string[]];
+        expect(file).toBe('git');
+        expect(args).toEqual(['check-ignore', '--', 'config/local.yml', path.join('config', 'local.yml')]);
+    });
+
+    it('skips a related file when git cannot say whether it is ignored', async () => {
+        mockCheckIgnoreExit(128);
+
+        const { contents, warnings } = await getRelatedFileContents(['src/a.ts'], '/repo');
+
+        expect(contents).toEqual({});
+        expect(warnings.join(' ')).toContain('could not check');
+        expect(fs.readFile).not.toHaveBeenCalled();
+    });
+
+    it('skips a related file whose content holds a secret', async () => {
+        vi.mocked(fs.readFile).mockResolvedValue('-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaA\n' as never);
+
+        const { contents, warnings } = await getRelatedFileContents(['deploy/notes.txt'], '/repo');
+
+        expect(contents).toEqual({});
+        expect(warnings.join(' ')).toContain('private key');
     });
 
     it('reads each related path and keys contents by repo-relative path', async () => {
@@ -583,7 +668,7 @@ describe('getRelatedFileContents', () => {
         // The lexical check passes for this path; only realpath exposes that
         // the link resolves outside the repository.
         vi.mocked(fs.realpath).mockImplementation((async (p: unknown) =>
-            String(p).endsWith('notes.md') ? '/Users/someone/.ssh/id_rsa' : path.resolve(String(p))) as never);
+            String(p).endsWith('notes.md') ? '/home/someone/.ssh/id_rsa' : path.resolve(String(p))) as never);
 
         const { contents, warnings } = await getRelatedFileContents(['notes.md'], '/repo');
 
@@ -669,7 +754,7 @@ describe('readDiagnosticsFile', () => {
 
     it('refuses a symlink inside the repo whose target escapes it', async () => {
         vi.mocked(fs.realpath).mockImplementation((async (p: unknown) =>
-            String(p).endsWith('tsc.log') ? '/Users/someone/.ssh/id_rsa' : path.resolve(String(p))) as never);
+            String(p).endsWith('tsc.log') ? '/home/someone/.ssh/id_rsa' : path.resolve(String(p))) as never);
 
         await expect(readDiagnosticsFile('build/tsc.log', '/repo')).rejects.toThrow(
             'must be a readable file within the repository'
@@ -869,7 +954,7 @@ describe('createUploadBudget', () => {
         vi.mocked(fs.stat).mockResolvedValue({ size: 10 } as never);
         vi.mocked(fs.readFile).mockResolvedValue('0123456789');
 
-        mockExecFile('');
+        mockCheckIgnoreExit(1);
         const first = await getRelatedFileContents(['a.ts'], '/repo', budget);
         const second = await getRelatedFileContents(['b.ts'], '/repo', budget);
 
@@ -967,6 +1052,7 @@ describe('looksBinary — one rule for every reader', () => {
 
 describe('the readers share the binary rule', () => {
     beforeEach(() => {
+        mockCheckIgnoreExit(1);
         vi.mocked(fs.realpath).mockImplementation((async (p: unknown) => path.resolve(String(p))) as never);
         vi.mocked(fs.stat).mockResolvedValue({ size: 200 } as never);
         // Dense control bytes, no NUL — passed the old NUL-only check.
@@ -983,5 +1069,42 @@ describe('the readers share the binary rule', () => {
 
     it('readDiagnosticsFile refuses it', async () => {
         await expect(readDiagnosticsFile('tsc.log', '/repo')).rejects.toThrow('looks binary');
+    });
+});
+
+describe('isSensitiveFile additions', () => {
+    it.each(['.envrc', 'infra/prod.tfvars', 'infra/terraform.tfvars.json', '.git-credentials', '.env.', '.env ', '.env::$DATA', 'prod:db.pem', 'deploy:id_rsa', 'certs/aws:creds.p12'])(
+        'treats %s as sensitive',
+        (name) => {
+            expect(isSensitiveFile(name)).toBe(true);
+        },
+    );
+
+    it.each(['src/environment.ts', 'docs/tfvars-guide.md', 'src/keyboard.ts', 'notes:draft.md'])('does not treat %s as sensitive', (name) => {
+        expect(isSensitiveFile(name)).toBe(false);
+    });
+});
+
+describe('gitIgnoreStatus', () => {
+    beforeEach(() => {
+        vi.mocked(fs.realpath).mockImplementation((async (p: unknown) => path.resolve(String(p))) as never);
+    });
+
+    it('is "ignored" when git check-ignore exits 0', async () => {
+        mockCheckIgnoreExit(0);
+
+        await expect(gitIgnoreStatus('/repo', ['.env'])).resolves.toBe('ignored');
+    });
+
+    it('is "not-ignored" only when git check-ignore exits 1', async () => {
+        mockCheckIgnoreExit(1);
+
+        await expect(gitIgnoreStatus('/repo', ['src/a.ts'])).resolves.toBe('not-ignored');
+    });
+
+    it('is "unknown" when git cannot answer', async () => {
+        mockCheckIgnoreExit(128);
+
+        await expect(gitIgnoreStatus('/tmp/x', ['a.ts'])).resolves.toBe('unknown');
     });
 });

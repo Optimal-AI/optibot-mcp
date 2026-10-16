@@ -221,6 +221,17 @@ describe('scan tools', () => {
             expect(result.isError).toBe(true);
             expect(result.content[0].text).toContain('not found');
         });
+
+        it('points an unknown scan id at list_security_scans, not at the repository list', async () => {
+            mockListSecurityIssues.mockResolvedValue({
+                items: [], totalItems: 0, page: 1, pageSize: 50, totalPages: 0,
+            });
+
+            const result = await registered.get('get_security_scan')!({ scanId: 999 }, {});
+
+            expect(result.content[0].text).toContain('list_security_scans');
+            expect(result.content[0].text).not.toContain('list_scannable_repos');
+        });
     });
 
     describe('trigger_security_scan', () => {
@@ -554,5 +565,23 @@ describe('scan tools', () => {
             expect(result.isError).toBe(true);
             expect(result.content[0].text).toContain('Server error (500)');
         });
+    });
+});
+
+describe('formatScanProgressStep', () => {
+    it('reports repository preparation without naming how it is done', async () => {
+        const { formatScanProgressStep } = await import('./scan.js');
+
+        expect(formatScanProgressStep({ step: 'cloning_repository', message: '', details: { repoName: 'acme/app' } } as never))
+            .toBe('[scan] Preparing repository acme/app');
+    });
+
+    it('shows the tool name and query of a tool_call step', async () => {
+        // sanitizeServerText is a pass-through in this file; the real function is
+        // exercised on the same kind of input in review.test.ts.
+        const { formatScanProgressStep } = await import('./scan.js');
+
+        expect(formatScanProgressStep({ step: 'tool_call', message: '', details: { tool: 'grep', query: 'secret' } } as never))
+            .toBe('[scan] Tool: grep \u2014 secret');
     });
 });
