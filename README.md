@@ -159,14 +159,26 @@ When a review cannot finish, the tool names which of two things happened: the di
 
 ##### Pre-attaching extra context
 
-`review_agent` accepts two optional inputs so you can hand the reviewer context that is not part of the diff:
+`review_agent` accepts three optional inputs that control the context the reviewer gets beyond the diff:
 
 | Input | Type | Purpose |
 |-------|------|---------|
 | `relatedPaths` | `string[]` | Repo-relative paths of extra files the reviewer should read — callers, interfaces, or tests that the changed code depends on but that are not themselves changed. The tool reads each from disk and sends it as related context. Files that cannot or should not be sent (missing, outside the repository, credential files, files your repository ignores, files that contain secrets, or binary files) are skipped, and a `Context warnings:` block is prepended to the output naming each one. |
 | `diagnosticsPath` | `string` | Repo-relative path to a local `tsc`/`eslint`/LSP output file. The tool reads it as plain text and passes it to the reviewer as local diagnostics. If it cannot be read, the tool warns and continues rather than failing. |
+| `scout` | `boolean` | Set to `false` to turn off the context step described below. It defaults to on. |
 
-Both are optional; with neither, the tool behaves exactly as before.
+All three are optional.
+
+##### Context step on larger changes
+
+On a change of 200 or more changed lines, `review_agent` first asks Optibot which other files in the repository the review will need. It reads those files from the working copy and sends them with the review, so the reviewer rarely has to report missing context. The step and the review count as one review.
+
+- Before reading anything, the tool sends a notification that names the files.
+- It reads only files git tracks. It skips files git ignores, files inside `.git`, binary files, credential files, files whose content contains a private key or an API token, and files that would exceed the upload limit. Each skipped file is named in the `Context warnings:` block.
+- The result's `meta.scout` reports how long the step took, which files it sent, and, when it did not run, why. The text result names the files it sent.
+- If the step fails or the service does not offer it, the review runs without it.
+
+Pass `scout: false` to skip the step.
 
 ##### Missing context is host-driven
 
