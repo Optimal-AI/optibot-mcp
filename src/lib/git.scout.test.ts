@@ -8,7 +8,15 @@ import { execFileSync } from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { createUploadBudget, getTrackedFiles, gitIgnoreStatus, readScoutedFile } from './git.js';
+import {
+    createUploadBudget,
+    getFileContents,
+    getRelatedFileContents,
+    getTrackedFiles,
+    gitIgnoreStatus,
+    readDiagnosticsFile,
+    readScoutedFile,
+} from './git.js';
 
 let repo: string;
 
@@ -161,5 +169,26 @@ describe('readScoutedFile', () => {
         } finally {
             fs.rmSync(outside, { recursive: true, force: true });
         }
+    });
+});
+
+describe('every reader refuses a symlink into the .git directory', () => {
+    beforeAll(() => {
+        fs.symlinkSync(path.join('.git', 'HEAD'), path.join(repo, 'head-link.txt'));
+    });
+
+    it('does not upload a changed file that links into .git', async () => {
+        const contents = await getFileContents([{ relativePath: 'head-link.txt', status: 'A' }], repo);
+        expect(contents).toEqual({});
+    });
+
+    it('skips a related file that links into .git, and says why', async () => {
+        const { contents, warnings } = await getRelatedFileContents(['head-link.txt'], repo);
+        expect(contents).toEqual({});
+        expect(warnings).toEqual([expect.stringContaining('inside the .git directory')]);
+    });
+
+    it('refuses a diagnostics file that links into .git', async () => {
+        await expect(readDiagnosticsFile('head-link.txt', repo)).rejects.toThrow('inside the .git directory');
     });
 });

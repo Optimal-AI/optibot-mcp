@@ -411,7 +411,7 @@ function isInsideRoot(root: string, target: string): boolean {
  */
 export type PathScreening =
     | { ok: true; absolutePath: string }
-    | { ok: false; reason: 'outside' | 'sensitive' | 'binary' };
+    | { ok: false; reason: 'outside' | 'git-dir' | 'sensitive' | 'binary' };
 
 export async function screenReadablePath(
     requestedPath: string,
@@ -419,6 +419,13 @@ export async function screenReadablePath(
 ): Promise<PathScreening> {
     const absolutePath = await resolveRelatedPath(requestedPath, repoRoot);
     if (!absolutePath) return { ok: false, reason: 'outside' };
+
+    // Git's own directory is inside the repository but never part of it, and
+    // its config can hold remote URLs with credentials. A symlink can point
+    // there under a harmless name, so the resolved path is checked too.
+    if (await isInsideGitDir(requestedPath, absolutePath, repoRoot)) {
+        return { ok: false, reason: 'git-dir' };
+    }
 
     // Both names, always: a symlink called `notes.md` pointing at `.env` is
     // inside the repository, so containment passes and only the resolved name
@@ -453,6 +460,8 @@ export async function getRelatedFileContents(
                 warnings.push(`Skipped potentially sensitive related file: ${relativePath}`);
             } else if (screened.reason === 'binary') {
                 warnings.push(`Skipped binary related file: ${relativePath}`);
+            } else if (screened.reason === 'git-dir') {
+                warnings.push(`Skipped related file: it is inside the .git directory: ${relativePath}`);
             } else {
                 warnings.push(`Skipped related file: not a readable file inside the repository: ${relativePath}`);
             }
@@ -564,16 +573,12 @@ export async function readScoutedFile(
         if (screened.reason === 'binary') {
             return { ok: false, warning: `Skipped binary scouted file: ${requestedPath}` };
         }
+        if (screened.reason === 'git-dir') {
+            return { ok: false, warning: `Skipped scouted file: it is inside the .git directory: ${requestedPath}` };
+        }
         return { ok: false, warning: `Skipped scouted file: not a readable file inside the repository: ${requestedPath}` };
     }
     const absolutePath = screened.absolutePath;
-
-    // Git's own directory is inside the repository but never part of it, and
-    // its config can hold remote URLs with credentials. A tracked symlink can
-    // point there under a harmless name, so the resolved path is checked too.
-    if (await isInsideGitDir(requestedPath, absolutePath, repoRoot)) {
-        return { ok: false, warning: `Skipped scouted file: it is inside the .git directory: ${requestedPath}` };
-    }
 
     // Both names, so an ignored link cannot pass under a tracked name.
     const ignored = await gitIgnoreStatus(repoRoot, [requestedPath, absolutePath]);
@@ -641,6 +646,9 @@ export async function readDiagnosticsFile(
         }
         if (screened.reason === 'binary') {
             throw new Error(`Diagnostics file looks binary, expected text output: ${filePath}`);
+        }
+        if (screened.reason === 'git-dir') {
+            throw new Error(`Diagnostics file must not be inside the .git directory: ${filePath}`);
         }
         throw new Error(`Diagnostics file must be a readable file within the repository. Got: ${filePath}`);
     }
