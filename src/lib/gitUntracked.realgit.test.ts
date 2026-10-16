@@ -5,7 +5,12 @@ import * as path from 'path';
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 
-import { getDiffHead } from './git.js';
+import {
+    getDiffHead,
+    UNTRACKED_DIFF_MAX_FILE_BYTES,
+    UNTRACKED_DIFF_MAX_FILES,
+    UNTRACKED_DIFF_MAX_TOTAL_BYTES,
+} from './git.js';
 
 const HAS_GIT = (() => {
     try {
@@ -84,5 +89,57 @@ describe.skipIf(!HAS_GIT)('getDiffHead with untracked files', () => {
         } finally {
             fs.rmSync(fresh, { recursive: true, force: true });
         }
+    });
+
+    describe('limits', () => {
+        let limited: string;
+        const git = (...args: string[]) => execFileSync('git', args, { cwd: limited });
+
+        beforeAll(() => {
+            limited = fs.mkdtempSync(path.join(os.tmpdir(), 'optibot-untracked-limits-'));
+            git('init', '-q');
+            git('config', 'user.email', 'test@example.com');
+            git('config', 'user.name', 'Test');
+            fs.writeFileSync(path.join(limited, 'base.ts'), 'base\n');
+            git('add', '.');
+            git('commit', '-q', '-m', 'base');
+        });
+
+        afterAll(() => {
+            fs.rmSync(limited, { recursive: true, force: true });
+        });
+
+        it('leaves out a file over the per-file limit and keeps the next one', async () => {
+            fs.mkdirSync(path.join(limited, 'one'));
+            fs.writeFileSync(path.join(limited, 'one', 'a-big.txt'), 'x\n'.repeat(UNTRACKED_DIFF_MAX_FILE_BYTES));
+            fs.writeFileSync(path.join(limited, 'one', 'b-small.ts'), 'export const s = 1;\n');
+            const diff = await getDiffHead(limited);
+            expect(diff).not.toContain('a-big.txt');
+            expect(diff).toContain('+++ b/one/b-small.ts');
+            fs.rmSync(path.join(limited, 'one'), { recursive: true });
+        });
+
+        it('stops adding files at the total limit', async () => {
+            fs.mkdirSync(path.join(limited, 'two'));
+            const each = UNTRACKED_DIFF_MAX_FILE_BYTES - 2;
+            const count = Math.floor(UNTRACKED_DIFF_MAX_TOTAL_BYTES / each) + 1;
+            for (let i = 0; i < count; i++) {
+                fs.writeFileSync(path.join(limited, 'two', `f${String(i).padStart(2, '0')}.txt`), 'y\n'.repeat(each / 2));
+            }
+            const diff = await getDiffHead(limited);
+            expect(diff).toContain('two/f00.txt');
+            expect(diff).not.toContain(`two/f${String(count - 1).padStart(2, '0')}.txt`);
+            fs.rmSync(path.join(limited, 'two'), { recursive: true });
+        });
+
+        it('adds at most the file-count limit', async () => {
+            fs.mkdirSync(path.join(limited, 'three'));
+            for (let i = 0; i <= UNTRACKED_DIFF_MAX_FILES; i++) {
+                fs.writeFileSync(path.join(limited, 'three', `n${String(i).padStart(4, '0')}.ts`), `export const n = ${i};\n`);
+            }
+            const diff = await getDiffHead(limited);
+            expect(diff.match(/^diff --git /gm)).toHaveLength(UNTRACKED_DIFF_MAX_FILES);
+            fs.rmSync(path.join(limited, 'three'), { recursive: true });
+        }, 60_000);
     });
 });
