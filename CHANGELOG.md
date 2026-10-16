@@ -16,6 +16,7 @@
 
 ### Security
 
+- The minimum `@modelcontextprotocol/sdk` is now 1.32.1. Earlier versions carry a published advisory.
 - `review_agent` does not send related files that your repository ignores, credential files such as `.envrc` and Terraform variable files, or files whose content contains a private key or an API token. Each skipped file is named in the result.
 
 ### Fixed
