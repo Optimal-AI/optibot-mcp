@@ -43,6 +43,54 @@ export function normalizeContextPath(p: string): string {
     return path.posix.normalize(p.replace(/\\/g, '/')).replace(/^(\.\/)+/, '');
 }
 
+/**
+ * The most repository-path characters review_agent sends to the context scout,
+ * counting one separator per path. It only binds on very large repositories,
+ * where it keeps the request well under the service's request size limit.
+ */
+export const AGENT_SCOUT_MAX_PATH_LIST_CHARS = 4_000_000;
+
+/**
+ * Trims `paths` to `maxChars` (each path plus one separator), keeping the paths
+ * that share the longest leading directory with a file in `anchorPaths`. Paths
+ * with the same shared depth keep their original order. Returns `paths` itself
+ * when it already fits.
+ */
+export function capRepositoryPaths(paths: string[], anchorPaths: string[], maxChars: number): string[] {
+    let total = 0;
+    for (const p of paths) total += p.length + 1;
+    if (total <= maxChars) return paths;
+
+    // Every directory prefix of an anchor's directory, such as `a` and `a/b`
+    // for `a/b/c.ts`, mapped to its depth.
+    const anchorDirs = new Map<string, number>();
+    for (const anchor of anchorPaths) {
+        const parts = normalizeContextPath(anchor).split('/').slice(0, -1);
+        for (let depth = 1; depth <= parts.length; depth++) {
+            anchorDirs.set(parts.slice(0, depth).join('/'), depth);
+        }
+    }
+    const sharedDepth = (p: string): number => {
+        const parts = p.split('/');
+        for (let depth = parts.length - 1; depth > 0; depth--) {
+            if (anchorDirs.has(parts.slice(0, depth).join('/'))) return depth;
+        }
+        return 0;
+    };
+
+    const ranked = paths
+        .map((p, index) => ({ p, index, depth: sharedDepth(p) }))
+        .sort((a, b) => b.depth - a.depth || a.index - b.index);
+    const kept: string[] = [];
+    let used = 0;
+    for (const { p } of ranked) {
+        if (used + p.length + 1 > maxChars) continue;
+        kept.push(p);
+        used += p.length + 1;
+    }
+    return kept;
+}
+
 /** The backend's skip reason when it is one this client knows, so unexpected server text never reaches the output. */
 function backendSkipReason(reason: unknown): AgentScoutSkipReason | undefined {
     return (AGENT_SCOUT_BACKEND_SKIP_REASONS as readonly unknown[]).includes(reason)
@@ -111,7 +159,7 @@ export async function runScout(
         answer = await client.scoutAgentContext({
             patch: params.patch,
             providedPaths,
-            repositoryPaths,
+            repositoryPaths: capRepositoryPaths(repositoryPaths, providedPaths, AGENT_SCOUT_MAX_PATH_LIST_CHARS),
             repositoryName: params.repositoryName,
         });
     } catch (err) {

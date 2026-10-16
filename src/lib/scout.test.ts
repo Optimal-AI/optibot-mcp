@@ -8,7 +8,14 @@ vi.mock('./git.js', () => ({
     readScoutedFile: (...args: unknown[]) => mockReadScoutedFile(...args),
 }));
 
-import { countChangedLines, normalizeContextPath, runScout, AGENT_SCOUT_MIN_CHANGED_LINES } from './scout.js';
+import {
+    AGENT_SCOUT_MAX_PATH_LIST_CHARS,
+    AGENT_SCOUT_MIN_CHANGED_LINES,
+    capRepositoryPaths,
+    countChangedLines,
+    normalizeContextPath,
+    runScout,
+} from './scout.js';
 import { createUploadBudget } from './git.js';
 
 /** A one-file diff with `n` added lines. */
@@ -63,7 +70,46 @@ describe('normalizeContextPath', () => {
     });
 });
 
+describe('capRepositoryPaths', () => {
+    it('returns the list unchanged when it fits', () => {
+        const paths = ['a.ts', 'src/b.ts'];
+        expect(capRepositoryPaths(paths, ['src/x.ts'], 100)).toBe(paths);
+    });
+
+    it('keeps the paths nearest the anchors first, in their original order within a depth', () => {
+        const paths = ['z/far.ts', 'src/other/o.ts', 'src/api/a.ts', 'root.ts', 'src/api/b.ts'];
+        // Each path costs its length plus one: room for the two src/api files and src/other/o.ts.
+        const room = 'src/api/a.ts'.length + 'src/api/b.ts'.length + 'src/other/o.ts'.length + 3;
+        expect(capRepositoryPaths(paths, ['src/api/changed.ts'], room)).toEqual([
+            'src/api/a.ts',
+            'src/api/b.ts',
+            'src/other/o.ts',
+        ]);
+    });
+
+    it('counts one separator per path and skips a path that does not fit for a shorter one that does', () => {
+        const paths = ['src/a-very-long-name.ts', 'src/b.ts'];
+        expect(capRepositoryPaths(paths, ['src/x.ts'], 'src/b.ts'.length + 1)).toEqual(['src/b.ts']);
+    });
+
+    it('treats a root-level anchor as sharing no directory', () => {
+        const paths = ['b.ts', 'a/c.ts'];
+        expect(capRepositoryPaths(paths, ['x.ts'], 'b.ts'.length + 1)).toEqual(['b.ts']);
+    });
+});
+
 describe('runScout', () => {
+    it('sends a capped path list when the repository is larger than the cap', async () => {
+        const many = Array.from({ length: 5 }, (_, i) => `vendor/${'x'.repeat(AGENT_SCOUT_MAX_PATH_LIST_CHARS / 4)}${i}.ts`);
+        mockGetTrackedFiles.mockResolvedValue(['src/near.ts', ...many]);
+        const c = client({ paths: [], skipped: false });
+        await runScout(c, { patch: LARGE, providedPaths: ['src/changed.ts'] }, '/repo', budget);
+        const sent = c.scoutAgentContext.mock.calls[0][0].repositoryPaths as string[];
+        expect(sent[0]).toBe('src/near.ts');
+        expect(sent.reduce((n, p) => n + p.length + 1, 0)).toBeLessThanOrEqual(AGENT_SCOUT_MAX_PATH_LIST_CHARS);
+        expect(sent.length).toBeLessThan(6);
+    });
+
     it('skips a small change without calling the backend', async () => {
         const c = client({ paths: [], skipped: false });
         const out = await runScout(c, { patch: patchWithLines(AGENT_SCOUT_MIN_CHANGED_LINES - 1), providedPaths: [] }, '/repo', budget);
